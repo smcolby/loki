@@ -1,11 +1,24 @@
 """Configuration loading and path resolution for loki."""
 
+import os
 from pathlib import Path
 
 import yaml
 from pydantic import BaseModel
 
+# Only accurate for editable installs; kept for backward-compatibility with tests.
 REPO_ROOT = Path(__file__).parent.parent
+
+
+def _default_root() -> Path:
+    """Return the working root directory for config and data path resolution.
+
+    Checks the ``LOKI_ROOT`` environment variable first, then falls back to
+    the current working directory. This makes loki work correctly whether
+    installed as an editable package or a standard wheel.
+    """
+    env = os.environ.get("LOKI_ROOT")
+    return Path(env) if env else Path.cwd()
 
 
 class KiwixFile(BaseModel):
@@ -69,32 +82,43 @@ def load_config(path: Path | None = None) -> LokiConfig:
     ----------
     path : Path or None, optional
         Explicit path to the config file. If ``None``, defaults to
-        ``<repo_root>/config.yaml``.
+        ``$LOKI_ROOT/config.yaml`` when ``LOKI_ROOT`` is set, otherwise
+        ``./config.yaml`` relative to the current working directory.
 
     Returns
     -------
     LokiConfig
         Validated configuration parsed from the YAML file.
+
+    Raises
+    ------
+    SystemExit
+        If the config file does not exist or contains invalid YAML.
     """
-    config_path = path or REPO_ROOT / "config.yaml"
-    with open(config_path) as f:
-        data = yaml.safe_load(f) or {}
+    config_path = path or _default_root() / "config.yaml"
+    try:
+        with open(config_path) as f:
+            data = yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        raise SystemExit(f"Error: config file not found: {config_path}")
+    except yaml.YAMLError as exc:
+        raise SystemExit(f"Error: invalid YAML in {config_path}: {exc}")
     return LokiConfig.model_validate(data)
 
 
 def kiwix_dir() -> Path:
-    """Return the absolute path to the kiwix data directory."""
-    return REPO_ROOT / "data" / "kiwix"
+    """Return the path to the kiwix data directory under ``LOKI_ROOT``."""
+    return _default_root() / "data" / "kiwix"
 
 
 def caddyfile_path() -> Path:
-    """Return the absolute path to the Caddyfile."""
-    return REPO_ROOT / "Caddyfile"
+    """Return the path to the Caddyfile under ``LOKI_ROOT``."""
+    return _default_root() / "Caddyfile"
 
 
 def env_file_path() -> Path:
-    """Return the absolute path to the generated .env file."""
-    return REPO_ROOT / ".env"
+    """Return the path to the generated .env file under ``LOKI_ROOT``."""
+    return _default_root() / ".env"
 
 
 def build_caddyfile(caddy_url: str) -> str:

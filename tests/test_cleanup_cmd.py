@@ -1,5 +1,6 @@
 """Tests for the cleanup subcommand — orphaned ZIM files and Ollama models."""
 
+import subprocess
 from pathlib import Path
 
 from click.testing import CliRunner
@@ -50,7 +51,7 @@ def test_cleanup_no_orphaned_zims_prints_message(mocker, sample_config, tmp_path
     """Cleanup prints a message when there are no orphaned ZIM files on disk."""
     mocker.patch("loki.cli.load_config", return_value=sample_config)
     mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path)
-    list_result = mocker.MagicMock()
+    list_result = mocker.MagicMock(spec=subprocess.CompletedProcess)
     list_result.stdout = _ollama_list_output("llama3:8b")
     mocker.patch("loki.cli.subprocess.run", autospec=True, return_value=list_result)
 
@@ -65,7 +66,7 @@ def test_cleanup_skips_configured_zim_file(mocker, sample_config, tmp_path):
     mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path)
     filename = Path(sample_config.kiwix_files[0].url).name
     (tmp_path / filename).touch()
-    list_result = mocker.MagicMock()
+    list_result = mocker.MagicMock(spec=subprocess.CompletedProcess)
     list_result.stdout = _ollama_list_output()
     mocker.patch("loki.cli.subprocess.run", autospec=True, return_value=list_result)
 
@@ -79,7 +80,7 @@ def test_cleanup_lists_orphaned_zim_file(mocker, sample_config, tmp_path):
     mocker.patch("loki.cli.load_config", return_value=sample_config)
     mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path)
     (tmp_path / "old_encyclopedia.zim").touch()
-    list_result = mocker.MagicMock()
+    list_result = mocker.MagicMock(spec=subprocess.CompletedProcess)
     list_result.stdout = _ollama_list_output("llama3:8b")
     mocker.patch("loki.cli.subprocess.run", autospec=True, return_value=list_result)
 
@@ -94,7 +95,7 @@ def test_cleanup_deletes_orphaned_zim_on_confirm(mocker, sample_config, tmp_path
     mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path)
     orphan = tmp_path / "old_encyclopedia.zim"
     orphan.touch()
-    list_result = mocker.MagicMock()
+    list_result = mocker.MagicMock(spec=subprocess.CompletedProcess)
     list_result.stdout = _ollama_list_output("llama3:8b")
     mocker.patch("loki.cli.subprocess.run", autospec=True, return_value=list_result)
 
@@ -109,7 +110,7 @@ def test_cleanup_preserves_orphaned_zim_on_deny(mocker, sample_config, tmp_path)
     mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path)
     orphan = tmp_path / "old_encyclopedia.zim"
     orphan.touch()
-    list_result = mocker.MagicMock()
+    list_result = mocker.MagicMock(spec=subprocess.CompletedProcess)
     list_result.stdout = _ollama_list_output("llama3:8b")
     mocker.patch("loki.cli.subprocess.run", autospec=True, return_value=list_result)
 
@@ -122,7 +123,7 @@ def test_cleanup_handles_missing_kiwix_dir(mocker, sample_config, tmp_path):
     """Cleanup handles the case where the kiwix data directory does not exist."""
     mocker.patch("loki.cli.load_config", return_value=sample_config)
     mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path / "nonexistent")
-    list_result = mocker.MagicMock()
+    list_result = mocker.MagicMock(spec=subprocess.CompletedProcess)
     list_result.stdout = _ollama_list_output("llama3:8b")
     mocker.patch("loki.cli.subprocess.run", autospec=True, return_value=list_result)
 
@@ -138,7 +139,7 @@ def test_cleanup_no_orphaned_models_prints_message(mocker, sample_config, tmp_pa
     """Cleanup prints a message when all installed models are in the config."""
     mocker.patch("loki.cli.load_config", return_value=sample_config)
     mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path)
-    list_result = mocker.MagicMock()
+    list_result = mocker.MagicMock(spec=subprocess.CompletedProcess)
     list_result.stdout = _ollama_list_output("llama3:8b")
     mocker.patch("loki.cli.subprocess.run", autospec=True, return_value=list_result)
 
@@ -151,7 +152,7 @@ def test_cleanup_skips_configured_ollama_model(mocker, sample_config, tmp_path):
     """Cleanup does not treat a model that matches a config entry as an orphan."""
     mocker.patch("loki.cli.load_config", return_value=sample_config)
     mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path)
-    list_result = mocker.MagicMock()
+    list_result = mocker.MagicMock(spec=subprocess.CompletedProcess)
     list_result.stdout = _ollama_list_output("llama3:8b")
     mocker.patch("loki.cli.subprocess.run", autospec=True, return_value=list_result)
 
@@ -164,7 +165,7 @@ def test_cleanup_lists_orphaned_ollama_model(mocker, sample_config, tmp_path):
     """Cleanup lists installed models that are not present in the config."""
     mocker.patch("loki.cli.load_config", return_value=sample_config)
     mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path)
-    list_result = mocker.MagicMock()
+    list_result = mocker.MagicMock(spec=subprocess.CompletedProcess)
     list_result.stdout = _ollama_list_output("llama3:8b", "mistral:7b")
     mocker.patch("loki.cli.subprocess.run", autospec=True, return_value=list_result)
 
@@ -177,9 +178,9 @@ def test_cleanup_removes_orphaned_model_on_confirm(mocker, sample_config, tmp_pa
     """Cleanup runs `ollama rm` for each orphaned model when the user confirms."""
     mocker.patch("loki.cli.load_config", return_value=sample_config)
     mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path)
-    list_result = mocker.MagicMock()
+    list_result = mocker.MagicMock(spec=subprocess.CompletedProcess)
     list_result.stdout = _ollama_list_output("llama3:8b", "mistral:7b")
-    rm_result = mocker.MagicMock()
+    rm_result = mocker.MagicMock(spec=subprocess.CompletedProcess)
     rm_result.returncode = 0
     mock_run = mocker.patch(
         "loki.cli.subprocess.run",
@@ -196,7 +197,7 @@ def test_cleanup_skips_model_removal_on_deny(mocker, sample_config, tmp_path):
     """Cleanup does not run `ollama rm` when the user denies the prompt."""
     mocker.patch("loki.cli.load_config", return_value=sample_config)
     mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path)
-    list_result = mocker.MagicMock()
+    list_result = mocker.MagicMock(spec=subprocess.CompletedProcess)
     list_result.stdout = _ollama_list_output("llama3:8b", "mistral:7b")
     mock_run = mocker.patch(
         "loki.cli.subprocess.run", autospec=True, return_value=list_result

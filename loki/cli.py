@@ -1,6 +1,7 @@
 """CLI entry point for the loki management tool."""
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -11,6 +12,15 @@ from loki.config import (
     load_config, kiwix_dir, caddyfile_path, build_caddyfile,
     env_file_path, build_env_file,
 )
+
+
+def _require_tool(name: str) -> None:
+    """Exit with a clear message if ``name`` is not found on PATH.
+
+    Provides a better UX than letting subprocess raise a raw FileNotFoundError.
+    """
+    if shutil.which(name) is None:
+        raise SystemExit(f"Error: '{name}' is not installed or not on PATH.")
 
 
 def _parse_ollama_list(output: str) -> list[str]:
@@ -107,6 +117,7 @@ def setup() -> None:
             click.echo(f"Skipping {filename} — already exists.")
             continue
 
+        _require_tool("aria2c")
         click.echo(f"Downloading {entry.name} to {dest_file} ...")
         threads = str(_aria2c_threads())
         result = subprocess.run(
@@ -125,6 +136,8 @@ def setup() -> None:
 @cli.command()
 def start() -> None:
     """Pull Ollama models and start the Docker Compose stack."""
+    _require_tool("ollama")
+    _require_tool("docker")
     config = load_config()
     ollama_url = f"http://localhost:{config.ports.ollama}/api/tags"
 
@@ -139,7 +152,12 @@ def start() -> None:
 
     for model in config.ollama_models:
         click.echo(f"Pulling Ollama model: {model}")
-        subprocess.run(["ollama", "pull", model], check=False)
+        result = subprocess.run(["ollama", "pull", model], check=False)
+        if result.returncode != 0:
+            click.echo(
+                f"Warning: failed to pull {model} (exit code {result.returncode}).",
+                err=True,
+            )
 
     click.echo("Starting Docker Compose stack ...")
     subprocess.run(["docker", "compose", "up", "-d"], check=False)
@@ -148,6 +166,7 @@ def start() -> None:
 @cli.command()
 def stop() -> None:
     """Stop the Docker Compose stack."""
+    _require_tool("docker")
     click.echo("Stopping Docker Compose stack ...")
     subprocess.run(["docker", "compose", "down"], check=False)
 
@@ -175,6 +194,7 @@ def status() -> None:
 @cli.command()
 def cleanup() -> None:
     """Remove ZIM files and Ollama models no longer listed in config."""
+    _require_tool("ollama")
     config = load_config()
 
     # ZIM files.

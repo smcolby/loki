@@ -19,3 +19,15 @@ def sample_config() -> LokiConfig:
         ],
         ollama_models=["llama3:8b"],
     )
+
+
+@pytest.fixture(autouse=True)
+def _stub_shutil_which(mocker):
+    """Prevent _require_tool from failing when external tools are not on PATH.
+
+    All CLI command tests mock subprocess.run, so external tools never execute.
+    This stub ensures shutil.which returns a truthy value so the pre-flight
+    check passes in every test by default. Tests that specifically exercise
+    _require_tool can override this by re-patching shutil.which to None.
+    """
+    mocker.patch("loki.cli.shutil.which", return_value="/usr/bin/stub")

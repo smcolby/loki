@@ -91,9 +91,24 @@ def test_load_config_raises_on_missing_kiwix_url(tmp_path):
         load_config(config_file)
 
 
-def test_kiwix_dir_is_under_repo_root():
-    """kiwix_dir returns a path inside the repository root."""
-    assert kiwix_dir() == REPO_ROOT / "data" / "kiwix"
+def test_load_config_raises_on_missing_file(tmp_path):
+    """load_config exits with a clear message when config.yaml does not exist."""
+    with pytest.raises(SystemExit, match="not found"):
+        load_config(tmp_path / "nonexistent.yaml")
+
+
+def test_load_config_raises_on_malformed_yaml(tmp_path):
+    """load_config exits with a clear message when the YAML is syntactically invalid."""
+    bad_config = tmp_path / "config.yaml"
+    bad_config.write_text(":\n  bad: [unclosed\n")
+    with pytest.raises(SystemExit, match="invalid YAML"):
+        load_config(bad_config)
+
+
+def test_kiwix_dir_is_under_loki_root(monkeypatch, tmp_path):
+    """kiwix_dir returns a path inside the directory set by LOKI_ROOT."""
+    monkeypatch.setenv("LOKI_ROOT", str(tmp_path))
+    assert kiwix_dir() == tmp_path / "data" / "kiwix"
 
 
 def test_repo_root_contains_pyproject():
@@ -120,9 +135,10 @@ def test_loki_config_default_url_is_local_tld():
     assert LokiConfig().url.endswith(".local")
 
 
-def test_caddyfile_path_is_under_repo_root():
-    """caddyfile_path returns the Caddyfile path at the repository root."""
-    assert caddyfile_path() == REPO_ROOT / "Caddyfile"
+def test_caddyfile_path_is_under_loki_root(monkeypatch, tmp_path):
+    """caddyfile_path returns the Caddyfile path inside the LOKI_ROOT directory."""
+    monkeypatch.setenv("LOKI_ROOT", str(tmp_path))
+    assert caddyfile_path() == tmp_path / "Caddyfile"
 
 
 def test_ports_config_defaults():
@@ -165,6 +181,7 @@ def test_build_env_file_uses_custom_ports():
     assert "OLLAMA_PORT=12000" in content
 
 
-def test_env_file_path_is_under_repo_root():
-    """env_file_path returns the .env path at the repository root."""
-    assert env_file_path() == REPO_ROOT / ".env"
+def test_env_file_path_is_under_loki_root(monkeypatch, tmp_path):
+    """env_file_path returns the .env path inside the LOKI_ROOT directory."""
+    monkeypatch.setenv("LOKI_ROOT", str(tmp_path))
+    assert env_file_path() == tmp_path / ".env"

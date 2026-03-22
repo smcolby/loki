@@ -1,5 +1,7 @@
 """Tests for the start subcommand — Ollama health check, model pull, and compose up."""
 
+import subprocess
+
 import requests
 from click.testing import CliRunner
 
@@ -10,7 +12,7 @@ from loki.config import LokiConfig, PortsConfig
 def test_start_pulls_models_and_runs_compose(mocker, sample_config):
     """The start command pulls each configured model then starts the compose stack."""
     mocker.patch("loki.cli.load_config", return_value=sample_config)
-    mock_response = mocker.MagicMock()
+    mock_response = mocker.MagicMock(spec=requests.Response)
     mock_response.status_code = 200
     mocker.patch("loki.cli.requests.get", autospec=True, return_value=mock_response)
     mock_run = mocker.patch("loki.cli.subprocess.run", autospec=True)
@@ -25,7 +27,7 @@ def test_start_pulls_models_and_runs_compose(mocker, sample_config):
 def test_start_compose_called_after_model_pull(mocker, sample_config):
     """The start command calls docker compose up -d after all ollama pull commands."""
     mocker.patch("loki.cli.load_config", return_value=sample_config)
-    mock_response = mocker.MagicMock()
+    mock_response = mocker.MagicMock(spec=requests.Response)
     mock_response.status_code = 200
     mocker.patch("loki.cli.requests.get", autospec=True, return_value=mock_response)
     mock_run = mocker.patch("loki.cli.subprocess.run", autospec=True)
@@ -44,7 +46,7 @@ def test_start_uses_configured_ollama_port(mocker, sample_config):
     """The start command pings the Ollama port specified in config."""
     config = sample_config.model_copy(update={"ports": PortsConfig(ollama=12000)})
     mocker.patch("loki.cli.load_config", return_value=config)
-    mock_response = mocker.MagicMock()
+    mock_response = mocker.MagicMock(spec=requests.Response)
     mock_response.status_code = 200
     mock_get = mocker.patch("loki.cli.requests.get", autospec=True, return_value=mock_response)
     mocker.patch("loki.cli.subprocess.run", autospec=True)
@@ -90,7 +92,7 @@ def test_start_still_runs_compose_when_ollama_offline(mocker, sample_config):
 def test_start_no_models_skips_pull(mocker):
     """The start command does not call ollama pull when ollama_models is empty."""
     mocker.patch("loki.cli.load_config", return_value=LokiConfig())
-    mock_response = mocker.MagicMock()
+    mock_response = mocker.MagicMock(spec=requests.Response)
     mock_response.status_code = 200
     mocker.patch("loki.cli.requests.get", autospec=True, return_value=mock_response)
     mock_run = mocker.patch("loki.cli.subprocess.run", autospec=True)
@@ -99,3 +101,26 @@ def test_start_no_models_skips_pull(mocker):
 
     commands = [call.args[0] for call in mock_run.call_args_list]
     assert not any("ollama" in cmd and "pull" in cmd for cmd in commands)
+
+
+def test_start_warns_on_failed_model_pull(mocker, sample_config):
+    """The start command prints a warning when ollama pull exits with a non-zero code."""
+    mocker.patch("loki.cli.load_config", return_value=sample_config)
+    mock_response = mocker.MagicMock(spec=requests.Response)
+    mock_response.status_code = 200
+    mocker.patch("loki.cli.requests.get", autospec=True, return_value=mock_response)
+    failed = mocker.MagicMock(spec=subprocess.CompletedProcess)
+    failed.returncode = 1
+    success = mocker.MagicMock(spec=subprocess.CompletedProcess)
+    success.returncode = 0
+    # First call is ollama pull (fails), second is docker compose up (succeeds).
+    mocker.patch(
+        "loki.cli.subprocess.run",
+        autospec=True,
+        side_effect=[failed, success],
+    )
+
+    result = CliRunner().invoke(cli, ["start"])
+
+    assert "Warning" in result.output
+    assert "llama3:8b" in result.output

@@ -1,6 +1,7 @@
 """Tests for the setup subcommand — Caddyfile generation and ZIM file download via aria2c."""
 
 import os
+import subprocess
 from pathlib import Path
 
 from click.testing import CliRunner
@@ -189,7 +190,7 @@ def test_setup_prints_failure_on_nonzero_exit(mocker, sample_config, tmp_path):
     mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path)
     mocker.patch("loki.cli.caddyfile_path", return_value=tmp_path / "Caddyfile")
     mocker.patch("loki.cli.env_file_path", return_value=tmp_path / ".env")
-    mock_result = mocker.MagicMock()
+    mock_result = mocker.MagicMock(spec=subprocess.CompletedProcess)
     mock_result.returncode = 1
     mocker.patch("loki.cli.subprocess.run", autospec=True, return_value=mock_result)
 

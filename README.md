@@ -72,6 +72,17 @@ ollama_models:
 
 `loki setup` generates the `Caddyfile` and `.env` automatically — do not edit them by hand.
 
+### LOKI_ROOT
+
+By default, loki resolves all paths (`config.yaml`, `Caddyfile`, `.env`, `data/kiwix/`) relative to the **current working directory**. Run every `loki` command from the repository root, or set `LOKI_ROOT` to an explicit path:
+
+```bash
+export LOKI_ROOT=/path/to/loki
+loki setup
+```
+
+This also makes loki work correctly when installed as a non-editable wheel.
+
 ### Local hostname resolution (no router changes required)
 
 Using the `.local` TLD (the default) means the hostname is broadcast via **mDNS** and resolves on your LAN without any router configuration. Most modern operating systems support mDNS natively:
@@ -133,7 +144,17 @@ To load it into Open WebUI:
 1. Open the Open WebUI interface (e.g. `http://loki.local`).
 2. Navigate to **Admin Panel → Tools** and click **+** to create a new tool.
 3. Copy the full contents of `tools/kiwix_tool.py` and paste them into the editor.
-4. Save the tool and assign it to your model under **Model → Tools**.
+4. Save the tool, then open the model's settings under **Admin Panel → Models**, select your model, and enable the Kiwix tool under the **Tools** tab.
+
+### Enabling native tool calling
+
+By default, Open WebUI injects tool definitions into the system prompt, which is unreliable with smaller models. For best results, enable native tool calling so the model uses its built-in function-calling interface instead:
+
+1. Open **Admin Panel → Models** and select your model.
+2. Under **Advanced Parameters**, set **Tool Calling** to **Native**.
+3. Save. The model will now receive tool definitions as structured function schemas rather than system prompt text.
+
+> **Note:** Native tool calling requires a model fine-tuned for function calling (e.g. `qwen3`, `mistral-nemo`, `llama3.1`). If responses degrade after enabling it, the model may not support the feature — revert to the default setting.
 
 ## Development
 
