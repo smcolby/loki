@@ -55,6 +55,13 @@ Edit `config.yaml` to define the server URL, which ZIM files to download, and wh
 ```yaml
 url: loki.local              # Hostname used to reach the server on your local network.
 
+# Host ports exposed by the Docker Compose services.
+# Change these if the defaults conflict with other services on your machine.
+ports:
+  caddy: 80      # Port for the Caddy reverse proxy (Open WebUI).
+  kiwix: 8080    # Port for the Kiwix offline knowledge server.
+  ollama: 11434  # Port for the native Ollama service (used for health checks).
+
 kiwix_files:
   - name: wikipedia_en_top_maxi
     url: https://download.kiwix.org/zim/wikipedia/wikipedia_en_top_maxi_2024-10.zim
@@ -63,7 +70,7 @@ ollama_models:
   - qwen3:30b
 ```
 
-`loki setup` generates the `Caddyfile` automatically from `url` — do not edit it by hand.
+`loki setup` generates the `Caddyfile` and `.env` automatically — do not edit them by hand.
 
 ### Local hostname resolution (no router changes required)
 
@@ -110,10 +117,11 @@ If you prefer a different TLD (e.g. `loki.home`), simply set `url: loki.home` in
 ## Usage
 
 ```
-loki setup    Generate the Caddyfile and download missing ZIM files.
+loki setup    Generate the Caddyfile, write port settings, and download missing ZIM files.
 loki start    Pull Ollama models and start the Docker Compose stack.
 loki stop     Stop the Docker Compose stack.
 loki status   Check the health of running services.
+loki cleanup  Remove ZIM files and Ollama models no longer listed in config.
 ```
 
 ## Connecting Kiwix to Open WebUI
