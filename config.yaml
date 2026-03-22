@@ -13,10 +13,10 @@ ports:
 # ZIM archives to download during `loki setup`.
 # Each entry requires a name (used for display) and a direct download URL.
 kiwix_files:
-  - name: wikipedia_en_top_maxi
-    url: https://download.kiwix.org/zim/wikipedia/wikipedia_en_top_maxi_2024-10.zim
+  - name: wikipedia_en_all_nopic
+    url: https://download.kiwix.org/zim/wikipedia/wikipedia_en_all_nopic_2025-12.zim
 
 # Ollama model tags to pull during `loki start`.
 # Run `ollama list` to see which models are already available on your system.
 ollama_models:
-  - qwen3:30b
+  - qwen3.5:9b
