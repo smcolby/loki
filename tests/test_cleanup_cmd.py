@@ -9,7 +9,18 @@ from loki.config import LokiConfig
 
 
 def _ollama_list_output(*model_names: str) -> str:
-    """Return synthetic `ollama list` output for the given model names."""
+    """Return synthetic ``ollama list`` output for the given model names.
+
+    Parameters
+    ----------
+    *model_names : str
+        Model name tags to include as data rows in the output.
+
+    Returns
+    -------
+    str
+        Formatted string matching the ``ollama list`` stdout format.
+    """
     header = "NAME            ID              SIZE    MODIFIED"
     rows = "\n".join(f"{m}       abc123def456    4.7 GB  1 day ago" for m in model_names)
     return f"{header}\n{rows}\n" if rows else f"{header}\n"

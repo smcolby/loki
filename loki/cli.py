@@ -14,7 +14,18 @@ from loki.config import (
 
 
 def _parse_ollama_list(output: str) -> list[str]:
-    """Parse `ollama list` stdout and return the list of installed model names."""
+    """Parse ``ollama list`` stdout and return the list of installed model names.
+
+    Parameters
+    ----------
+    output : str
+        Raw stdout captured from ``ollama list``.
+
+    Returns
+    -------
+    list of str
+        Model name tags extracted from the output (e.g. ``["llama3:8b"]``).
+    """
     lines = output.strip().splitlines()
     if len(lines) < 2:
         return []
@@ -27,6 +38,19 @@ def _aria2c_threads() -> int:
 
 
 def _ollama_warning(port: int) -> str:
+    """Return a warning message when the Ollama service is unreachable.
+
+    Parameters
+    ----------
+    port : int
+        The port on which Ollama was expected to be listening.
+
+    Returns
+    -------
+    str
+        Multi-line warning with instructions for resolving common connectivity
+        issues on Linux systemd environments.
+    """
     return (
         f"Warning: Ollama does not appear to be running at http://localhost:{port}.\n"
         "Ensure the Ollama service is active before starting the stack.\n"
@@ -153,7 +177,7 @@ def cleanup() -> None:
     """Remove ZIM files and Ollama models no longer listed in config."""
     config = load_config()
 
-    # --- ZIM files ---
+    # ZIM files.
     kiwix = kiwix_dir()
     if kiwix.exists():
         expected_zims = {Path(entry.url).name for entry in config.kiwix_files}
@@ -177,7 +201,7 @@ def cleanup() -> None:
     else:
         click.echo("No orphaned ZIM files found.")
 
-    # --- Ollama models ---
+    # Ollama models.
     result = subprocess.run(
         ["ollama", "list"], capture_output=True, text=True, check=False
     )
@@ -199,4 +223,5 @@ def cleanup() -> None:
 
 
 def main() -> None:
+    """Entry point for the loki CLI."""
     cli()
