@@ -13,6 +13,14 @@ from loki.config import (
 )
 
 
+def _parse_ollama_list(output: str) -> list[str]:
+    """Parse `ollama list` stdout and return the list of installed model names."""
+    lines = output.strip().splitlines()
+    if len(lines) < 2:
+        return []
+    return [line.split()[0] for line in lines[1:] if line.strip()]
+
+
 def _aria2c_threads() -> int:
     """Return half the number of logical CPU cores, with a minimum of 1."""
     return max(1, (os.cpu_count() or 2) // 2)
@@ -138,6 +146,56 @@ def status() -> None:
                 click.echo(f"  {label}: OFFLINE — HTTP {response.status_code} ({url})")
         except requests.exceptions.RequestException as exc:
             click.echo(f"  {label}: OFFLINE — {exc} ({url})")
+
+
+@cli.command()
+def cleanup() -> None:
+    """Remove ZIM files and Ollama models no longer listed in config."""
+    config = load_config()
+
+    # --- ZIM files ---
+    kiwix = kiwix_dir()
+    if kiwix.exists():
+        expected_zims = {Path(entry.url).name for entry in config.kiwix_files}
+        orphaned_zims = sorted(
+            f for f in kiwix.iterdir()
+            if f.suffix == ".zim" and f.name not in expected_zims
+        )
+    else:
+        orphaned_zims = []
+
+    if orphaned_zims:
+        click.echo("Orphaned ZIM files not in config.yaml:")
+        for f in orphaned_zims:
+            click.echo(f"  {f.name}")
+        if click.confirm(f"Delete {len(orphaned_zims)} ZIM file(s)?", default=False):
+            for f in orphaned_zims:
+                f.unlink()
+                click.echo(f"Deleted {f.name}.")
+        else:
+            click.echo("Skipping ZIM file removal.")
+    else:
+        click.echo("No orphaned ZIM files found.")
+
+    # --- Ollama models ---
+    result = subprocess.run(
+        ["ollama", "list"], capture_output=True, text=True, check=False
+    )
+    installed = _parse_ollama_list(result.stdout)
+    orphaned_models = sorted(set(installed) - set(config.ollama_models))
+
+    if orphaned_models:
+        click.echo("Orphaned Ollama models not in config.yaml:")
+        for model in orphaned_models:
+            click.echo(f"  {model}")
+        if click.confirm(f"Remove {len(orphaned_models)} Ollama model(s)?", default=False):
+            for model in orphaned_models:
+                subprocess.run(["ollama", "rm", model], check=False)
+                click.echo(f"Removed {model}.")
+        else:
+            click.echo("Skipping Ollama model removal.")
+    else:
+        click.echo("No orphaned Ollama models found.")
 
 
 def main() -> None:
