@@ -1,0 +1,22 @@
+# The local hostname used to reach the server from other devices on your network.
+# Use the .local TLD to enable mDNS resolution without any router configuration.
+# See the README for setup instructions on Linux and macOS.
+url: loki.local
+
+# Host ports exposed by the Docker Compose services.
+# Change these if the defaults conflict with other services on your machine.
+ports:
+  caddy: 80      # Port for the Caddy reverse proxy (Open WebUI).
+  kiwix: 8080    # Port for the Kiwix offline knowledge server.
+  ollama: 11434  # Port for the native Ollama service (used for health checks).
+
+# ZIM archives to download during `loki setup`.
+# Each entry requires a name (used for display) and a direct download URL.
+kiwix_files:
+  - name: wikipedia_en_top_maxi
+    url: https://download.kiwix.org/zim/wikipedia/wikipedia_en_top_maxi_2024-10.zim
+
+# Ollama model tags to pull during `loki start`.
+# Run `ollama list` to see which models are already available on your system.
+ollama_models:
+  - qwen3:30b

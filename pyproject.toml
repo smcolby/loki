@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "loki"
+version = "0.1.0"
+description = "Local Offline Knowledge Index — CLI for managing the loki server stack."
+requires-python = ">=3.11"
+dependencies = [
+    "click",
+    "pydantic>=2.0",
+    "requests",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-mock",
+]
+
+[project.scripts]
+loki = "loki.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["loki"]

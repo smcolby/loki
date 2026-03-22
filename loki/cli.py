@@ -1,0 +1,144 @@
+"""CLI entry point for the loki management tool."""
+
+import os
+import subprocess
+from pathlib import Path
+
+import click
+import requests
+
+from loki.config import (
+    load_config, kiwix_dir, caddyfile_path, build_caddyfile,
+    env_file_path, build_env_file,
+)
+
+
+def _aria2c_threads() -> int:
+    """Return half the number of logical CPU cores, with a minimum of 1."""
+    return max(1, (os.cpu_count() or 2) // 2)
+
+
+def _ollama_warning(port: int) -> str:
+    return (
+        f"Warning: Ollama does not appear to be running at http://localhost:{port}.\n"
+        "Ensure the Ollama service is active before starting the stack.\n"
+        "\n"
+        "On Linux, Ollama binds to 127.0.0.1 by default. Docker containers reach it\n"
+        "via host.docker.internal, which requires Ollama to listen on all interfaces.\n"
+        "To fix this, create a systemd override:\n"
+        "\n"
+        "    sudo systemctl edit ollama\n"
+        "\n"
+        "Add the following lines, then save and close the editor:\n"
+        "\n"
+        "    [Service]\n"
+        '    Environment="OLLAMA_HOST=0.0.0.0"\n'
+        "\n"
+        "Then restart the service:\n"
+        "\n"
+        "    sudo systemctl restart ollama\n"
+    )
+
+
+@click.group()
+def cli() -> None:
+    """Manage the loki local LLM and offline knowledge server."""
+
+
+@cli.command()
+def setup() -> None:
+    """Generate the Caddyfile, write port settings, and download missing ZIM files."""
+    config = load_config()
+
+    caddyfile_path().write_text(build_caddyfile(config.url))
+    click.echo(f"Caddyfile written for http://{config.url}")
+
+    ports = config.ports
+    env_file_path().write_text(build_env_file(ports))
+    click.echo(
+        f"Port configuration written: caddy={ports.caddy}, "
+        f"kiwix={ports.kiwix}, ollama={ports.ollama}"
+    )
+
+    dest = kiwix_dir()
+    dest.mkdir(parents=True, exist_ok=True)
+
+    if not config.kiwix_files:
+        click.echo("No kiwix_files entries found in config.yaml.")
+        return
+
+    for entry in config.kiwix_files:
+        filename = Path(entry.url).name
+        dest_file = dest / filename
+
+        if dest_file.exists():
+            click.echo(f"Skipping {filename} — already exists.")
+            continue
+
+        click.echo(f"Downloading {entry.name} to {dest_file} ...")
+        threads = str(_aria2c_threads())
+        result = subprocess.run(
+            ["aria2c", "-x", threads, "-s", threads, "-d", str(dest), entry.url],
+            check=False,
+        )
+        if result.returncode != 0:
+            click.echo(
+                f"Download failed for {entry.name} (aria2c exit code {result.returncode}).",
+                err=True,
+            )
+        else:
+            click.echo(f"Finished downloading {entry.name}.")
+
+
+@cli.command()
+def start() -> None:
+    """Pull Ollama models and start the Docker Compose stack."""
+    config = load_config()
+    ollama_url = f"http://localhost:{config.ports.ollama}/api/tags"
+
+    try:
+        response = requests.get(ollama_url, timeout=5)
+        ollama_online = response.status_code == 200
+    except requests.exceptions.RequestException:
+        ollama_online = False
+
+    if not ollama_online:
+        click.echo(_ollama_warning(config.ports.ollama), err=True)
+
+    for model in config.ollama_models:
+        click.echo(f"Pulling Ollama model: {model}")
+        subprocess.run(["ollama", "pull", model], check=False)
+
+    click.echo("Starting Docker Compose stack ...")
+    subprocess.run(["docker", "compose", "up", "-d"], check=False)
+
+
+@cli.command()
+def stop() -> None:
+    """Stop the Docker Compose stack."""
+    click.echo("Stopping Docker Compose stack ...")
+    subprocess.run(["docker", "compose", "down"], check=False)
+
+
+@cli.command()
+def status() -> None:
+    """Check the health of running services."""
+    config = load_config()
+    endpoints = [
+        ("Ollama", f"http://localhost:{config.ports.ollama}/api/tags"),
+        ("Kiwix", f"http://localhost:{config.ports.kiwix}"),
+    ]
+    click.echo("Checking service status ...")
+    for label, url in endpoints:
+        try:
+            response = requests.get(url, timeout=5)
+            if response.status_code == 200:
+                click.echo(f"  {label}: ONLINE ({url})")
+            else:
+                click.echo(f"  {label}: OFFLINE — HTTP {response.status_code} ({url})")
+        except requests.exceptions.RequestException as exc:
+            click.echo(f"  {label}: OFFLINE — {exc} ({url})")
+
+
+def main() -> None:
+    cli()

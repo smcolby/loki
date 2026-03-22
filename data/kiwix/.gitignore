@@ -1,0 +1,2 @@
+# Ignore downloaded ZIM archives but keep the directory tracked.
+*.zim
