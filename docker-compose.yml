@@ -1,7 +1,7 @@
 services:
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
-    container_name: open-webui
+    container_name: loki-open-webui
     restart: always
     # Map the container to the host gateway to access the native Ollama service.
     extra_hosts:
@@ -16,7 +16,7 @@ services:
 
   caddy:
     image: caddy:latest
-    container_name: caddy-proxy
+    container_name: loki-caddy
     restart: always
     ports:
       # Expose standard web traffic port to the local network.
@@ -31,7 +31,7 @@ services:
 
   kiwix-serve:
     image: ghcr.io/kiwix/kiwix-serve:latest
-    container_name: kiwix-local
+    container_name: loki-kiwix
     volumes:
       # Mount the local directory to the container data folder.
       - ./data/kiwix:/data
