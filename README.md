@@ -126,12 +126,14 @@ loki cleanup  Remove ZIM files and Ollama models no longer listed in config.
 
 ## Connecting Kiwix to Open WebUI
 
-Once the stack is running, you can expose the Kiwix server as a tool inside Open WebUI so the LLM can search your offline archives.
+A ready-made Open WebUI tool definition lives at [`tools/kiwix_tool.py`](tools/kiwix_tool.py). It exposes the Kiwix server to the LLM as a callable tool, communicating over the Docker internal network so it works regardless of your configured host port.
 
-1. Open the Open WebUI interface (e.g. `http://ai.home` or `http://localhost`).
-2. Navigate to **Settings → Tools → Add Tool**.
-3. Set the tool URL to `http://kiwix-local:8080` (using the Docker service hostname) or `http://localhost:8080` if accessing from the host.
-4. Save and enable the tool for your model of choice.
+To load it into Open WebUI:
+
+1. Open the Open WebUI interface (e.g. `http://loki.local`).
+2. Navigate to **Admin Panel → Tools** and click **+** to create a new tool.
+3. Copy the full contents of `tools/kiwix_tool.py` and paste them into the editor.
+4. Save the tool and assign it to your model under **Model → Tools**.
 
 ## Development
 
