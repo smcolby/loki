@@ -203,6 +203,37 @@ def test_setup_prints_failure_on_nonzero_exit(mocker, sample_config, tmp_path):
     assert "failed" in result.output.lower()
 
 
+def test_setup_copies_default_config_when_missing(mocker, tmp_path):
+    """The setup command copies the bundled default config when config.yaml is absent."""
+    mocker.patch("loki.cli.load_config", return_value=LokiConfig())
+    mocker.patch("loki.cli.loki_root", return_value=tmp_path)
+    mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path / "kiwix")
+    mocker.patch("loki.cli.caddyfile_path", return_value=tmp_path / "Caddyfile")
+    mocker.patch("loki.cli.env_file_path", return_value=tmp_path / ".env")
+    mock_copy = mocker.patch("loki.cli.shutil.copy")
+
+    result = CliRunner().invoke(cli, ["setup"], input="y\n")
+
+    mock_copy.assert_called_once()
+    assert "Created" in result.output
+
+
+def test_setup_does_not_overwrite_existing_config(mocker, tmp_path):
+    """The setup command does not overwrite config.yaml when it already exists."""
+    mocker.patch("loki.cli.load_config", return_value=LokiConfig())
+    mocker.patch("loki.cli.loki_root", return_value=tmp_path)
+    mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path / "kiwix")
+    mocker.patch("loki.cli.caddyfile_path", return_value=tmp_path / "Caddyfile")
+    mocker.patch("loki.cli.env_file_path", return_value=tmp_path / ".env")
+    (tmp_path / "config.yaml").write_text("url: custom.local\n")
+    mock_copy = mocker.patch("loki.cli.shutil.copy")
+
+    CliRunner().invoke(cli, ["setup"], input="y\n")
+
+    mock_copy.assert_not_called()
+    assert (tmp_path / "config.yaml").read_text() == "url: custom.local\n"
+
+
 # ---------------------------------------------------------------------------
 # Config review (Step 0)
 # ---------------------------------------------------------------------------

@@ -105,7 +105,10 @@ def load_config(path: Path | None = None) -> LokiConfig:
         with open(config_path) as f:
             data = yaml.safe_load(f) or {}
     except FileNotFoundError:
-        raise SystemExit(f"Error: config file not found: {config_path}") from None
+        raise SystemExit(
+            f"Error: config file not found: {config_path}\n"
+            "Run 'loki setup' to create it from the bundled defaults."
+        ) from None
     except yaml.YAMLError as exc:
         raise SystemExit(f"Error: invalid YAML in {config_path}: {exc}") from exc
     return LokiConfig.model_validate(data)

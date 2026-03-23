@@ -117,10 +117,15 @@ def setup() -> None:
     After all system steps, writes the Caddyfile and ``.env`` port configuration
     and downloads any ZIM files listed in ``config.yaml``.
     """
+    config_path = loki_root() / "config.yaml"
+    if not config_path.exists():
+        default = Path(__file__).parent / "config.default.yaml"
+        shutil.copy(default, config_path)
+        click.echo(f"Created {config_path} from defaults.")
+
     config = load_config()
 
     # Review configuration before proceeding
-    config_path = loki_root() / "config.yaml"
     try:
         click.echo(f"Configuration ({config_path}):\n")
         click.echo(config_path.read_text())
