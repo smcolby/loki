@@ -7,6 +7,7 @@
 Whether you're working air-gapped, want to keep queries off the cloud, or just want an always-available research assistant, `loki` runs entirely on your own hardware with no external dependencies at runtime.
 
 > **Linux only.** `loki` targets Linux systems with systemd. `loki setup` installs and configures all prerequisites automatically.
+> **Bring your own drivers.** We're going to leave GPU driver installation up to you as well (ideally _before_ installing `loki`).
 
 ## Prerequisites
 
@@ -46,7 +47,7 @@ ollama_models:
   - qwen3.5:9b
 ```
 
-The defaults work out of the box. Edit `kiwix_files` and `ollama_models` to match what you want downloaded. `loki setup` generates the `Caddyfile` and `.env` automatically — do not edit those files by hand.
+The defaults work out of the box. Edit `kiwix_files` (datasets [here](https://download.kiwix.org/zim/)) and `ollama_models` (models [here](https://ollama.com/search))to match what you want downloaded. `loki setup` generates the `Caddyfile` and `.env` automatically — do not edit those files by hand.
 
 ## Setup
 
