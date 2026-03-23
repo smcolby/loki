@@ -36,11 +36,11 @@ ports:
   ollama: 11434  # Port for the native Ollama service (used for health checks).
 
 kiwix_files:
-  - name: wikipedia_en_top_maxi
-    url: https://download.kiwix.org/zim/wikipedia/wikipedia_en_top_maxi_2024-10.zim
+  - name: wikipedia_en_all_nopic
+    url: https://download.kiwix.org/zim/wikipedia/wikipedia_en_all_nopic_2025-12.zim
 
 ollama_models:
-  - qwen3:30b
+  - qwen3.5:9b
 ```
 
 `loki setup` generates the `Caddyfile` and `.env` automatically — do not edit them by hand.
