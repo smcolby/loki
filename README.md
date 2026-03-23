@@ -1,12 +1,12 @@
 ![banner](assets/banner.jpg)
 
-# LOKI: Local Offline Knowledge Index
+# `loki`: local offline knowledge index
 
-LOKI is a self-hosted AI stack that gives you a private, fully offline knowledge base powered by a local LLM. It combines [Ollama](https://ollama.com) (local inference), [Open WebUI](https://openwebui.com) (chat interface), and [Kiwix](https://kiwix.org) (offline Wikipedia and other knowledge archives) — all orchestrated with Docker Compose and managed through a single CLI.
+`loki` is a self-hosted AI stack that gives you a private, fully offline knowledge base powered by a local LLM. It combines [Ollama](https://ollama.com) (local inference), [Open WebUI](https://openwebui.com) (chat interface), and [Kiwix](https://kiwix.org) (offline Wikipedia and other knowledge archives) — all orchestrated with Docker Compose and managed through a single CLI.
 
-Whether you're working air-gapped, want to keep queries off the cloud, or just want an always-available research assistant, LOKI runs entirely on your own hardware with no external dependencies at runtime.
+Whether you're working air-gapped, want to keep queries off the cloud, or just want an always-available research assistant, `loki` runs entirely on your own hardware with no external dependencies at runtime.
 
-> **Linux only.** LOKI targets Linux systems with systemd. `loki setup` installs and configures all prerequisites automatically.
+> **Linux only.** `loki` targets Linux systems with systemd. `loki setup` installs and configures all prerequisites automatically.
 
 ## Prerequisites
 
@@ -63,7 +63,7 @@ This will:
 3. **Install Docker** via the official convenience script and add your user to the `docker` group.
 4. **Install Ollama** via the official install script.
 5. **Configure Ollama network binding** — creates a systemd override so Ollama listens on all interfaces (required for Docker containers to reach it via `host.docker.internal`).
-6. **Add `LOKI_ROOT` to your shell profile** so `loki` commands work from any directory.
+6. **Add ``loki`_ROOT` to your shell profile** so `loki` commands work from any directory.
 7. **Generate the `Caddyfile` and `.env`** from your configuration.
 8. **Download ZIM files** listed in `kiwix_files` using aria2.
 
@@ -110,12 +110,12 @@ The default `url: loki.local` uses the `.local` TLD, which is broadcast via **mD
 
 If you prefer a non-`.local` hostname (e.g. `loki.home`), set it in `config.yaml` and add a static entry to `/etc/hosts` on each client device — the mDNS broadcast is skipped automatically for non-`.local` hostnames.
 
-### LOKI_ROOT
+### `loki`_ROOT
 
-By default, loki resolves all paths (`config.yaml`, `Caddyfile`, `.env`, `data/kiwix/`) relative to the current working directory. Run every `loki` command from the repository root, or set `LOKI_ROOT` to point elsewhere:
+By default, loki resolves all paths (`config.yaml`, `Caddyfile`, `.env`, `data/kiwix/`) relative to the current working directory. Run every `loki` command from the repository root, or set ``loki`_ROOT` to point elsewhere:
 
 ```bash
-export LOKI_ROOT=/path/to/loki
+export `loki`_ROOT=/path/to/loki
 loki setup
 ```
 
