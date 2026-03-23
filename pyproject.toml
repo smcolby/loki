@@ -18,6 +18,11 @@ dependencies = [
 dev = [
     "pytest",
     "pytest-mock",
+    "ruff",
+    "mypy",
+    "types-PyYAML",
+    "types-requests",
+    "pre-commit",
 ]
 
 [project.scripts]
@@ -25,3 +30,35 @@ loki = "loki.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["loki"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "N", "UP", "B", "S", "D"]
+ignore = [
+    "D205",  # blank line between summary and description — too strict for multi-line summaries
+    "D401",  # first line should be in imperative mood — subjective
+    "S603",  # subprocess call without trusted-input check — all commands are hardcoded
+    "S607",  # partial executable path — intentional for system tool wrappers
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "D100", "D101", "D102", "D103", "D104"]
+
+[tool.mypy]
+python_version = "3.11"
+disallow_untyped_defs = true
+check_untyped_defs = true
+warn_return_any = true
+warn_unused_ignores = true
+warn_unused_configs = true
+no_implicit_reexport = true

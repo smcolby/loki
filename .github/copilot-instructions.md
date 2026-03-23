@@ -31,3 +31,28 @@ pytest
 ```
 
 Tests live in `tests/` and use `pytest-mock`. The `sample_config` fixture in `conftest.py` provides a standard `LokiConfig` for all tests. Mock `subprocess.run`, `requests.get`, and file I/O rather than hitting real services.
+
+## Code Quality
+
+**Formatter and linter:** `ruff` (configured in `pyproject.toml`).
+
+```bash
+ruff format .          # format in place
+ruff check --fix .     # lint with auto-fix
+```
+
+Enabled rule sets: `E/W` (pycodestyle), `F` (pyflakes), `I` (isort), `N` (naming), `UP` (pyupgrade), `B` (bugbear), `S` (bandit), `D` (pydocstyle). Docstring convention is **numpy**. `S603`/`S607` are globally ignored — all subprocess calls use hardcoded system commands. `S602` suppressions are inline `# noqa: S602` on the two intentional `shell=True` vendor-install calls.
+
+**Type checker:** `mypy`.
+
+```bash
+mypy loki
+```
+
+Strict-ish: `disallow_untyped_defs`, `warn_return_any`, `warn_unused_ignores`. Not full `--strict` to avoid noise from click decorators.
+
+**Pre-commit:** `.pre-commit-config.yaml` runs `ruff-format`, `ruff --fix`, and `mypy loki` on every commit. Install hooks once with:
+
+```bash
+pre-commit install
+```
