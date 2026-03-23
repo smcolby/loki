@@ -1,13 +1,14 @@
-"""Tests for the setup subcommand — system setup prompts, Caddyfile generation, and ZIM downloads."""
+"""Tests for the setup subcommand — system setup prompts, Caddyfile generation, and ZIM
+downloads.
+"""
 
 import os
 import subprocess
 from pathlib import Path
 
-import pytest
 from click.testing import CliRunner
 
-from loki.cli import cli, _aria2c_threads
+from loki.cli import _aria2c_threads, cli
 from loki.config import LokiConfig, PortsConfig
 
 
@@ -172,7 +173,9 @@ def test_setup_prints_skip_message(mocker, sample_config, tmp_path):
 
 
 def test_setup_empty_kiwix_files(mocker, tmp_path):
-    """The setup command prints a message and makes no subprocess calls when kiwix_files is empty."""
+    """The setup command prints a message and makes no subprocess calls when kiwix_files is
+    empty.
+    """
     mocker.patch("loki.cli.load_config", return_value=LokiConfig())
     mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path)
     mocker.patch("loki.cli.caddyfile_path", return_value=tmp_path / "Caddyfile")
@@ -203,6 +206,7 @@ def test_setup_prints_failure_on_nonzero_exit(mocker, sample_config, tmp_path):
 # ---------------------------------------------------------------------------
 # Config review (Step 0)
 # ---------------------------------------------------------------------------
+
 
 def test_setup_config_review_decline_exits(mocker, tmp_path):
     """Declining the config review prompt exits setup without writing any files."""
@@ -251,6 +255,7 @@ def test_setup_config_review_displays_config_contents(mocker, tmp_path):
 # ---------------------------------------------------------------------------
 # System packages (Step 1)
 # ---------------------------------------------------------------------------
+
 
 def test_setup_prompts_to_install_missing_packages(mocker, tmp_path):
     """The setup command prompts to install packages when any are missing."""
@@ -319,6 +324,7 @@ def test_setup_warns_when_no_package_manager_found(mocker, tmp_path):
 # Docker (Step 2)
 # ---------------------------------------------------------------------------
 
+
 def test_setup_prompts_to_install_docker_when_missing(mocker, tmp_path):
     """The setup command prompts to install Docker when it is not on PATH."""
     mocker.patch("loki.cli.load_config", return_value=LokiConfig())
@@ -355,6 +361,7 @@ def test_setup_prints_docker_group_notice_after_install(mocker, tmp_path):
 # Ollama (Step 3)
 # ---------------------------------------------------------------------------
 
+
 def test_setup_prompts_to_install_ollama_when_missing(mocker, tmp_path):
     """The setup command prompts to install Ollama when it is not on PATH."""
     mocker.patch("loki.cli.load_config", return_value=LokiConfig())
@@ -388,6 +395,7 @@ def test_setup_skips_ollama_prompt_when_installed(mocker, tmp_path):
 # ---------------------------------------------------------------------------
 # Ollama binding (Step 4)
 # ---------------------------------------------------------------------------
+
 
 def test_setup_prompts_to_configure_ollama_binding_when_not_set(mocker, tmp_path):
     """The setup command prompts to configure Ollama binding when not already set."""
@@ -423,6 +431,7 @@ def test_setup_skips_ollama_binding_when_already_configured(mocker, tmp_path):
 # ---------------------------------------------------------------------------
 # LOKI_ROOT shell profile (Step 5)
 # ---------------------------------------------------------------------------
+
 
 def test_setup_adds_loki_root_to_profile_when_not_exported(mocker, tmp_path):
     """The setup command adds LOKI_ROOT to the shell profile when not already present."""

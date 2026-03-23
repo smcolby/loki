@@ -9,14 +9,30 @@ import click
 import requests
 
 from loki.config import (
-    load_config, kiwix_dir, caddyfile_path, build_caddyfile,
-    env_file_path, build_env_file, loki_root, avahi_pid_file,
+    avahi_pid_file,
+    build_caddyfile,
+    build_env_file,
+    caddyfile_path,
+    env_file_path,
+    kiwix_dir,
+    load_config,
+    loki_root,
 )
 from loki.system import (
-    detect_package_manager, is_installed, install_packages, PACKAGE_MAP,
-    install_docker, install_ollama, is_ollama_binding_configured,
-    configure_ollama_binding, detect_shell_profile, loki_root_already_exported,
-    add_loki_root_to_profile, get_local_ip, start_avahi_publish, stop_avahi_publish,
+    PACKAGE_MAP,
+    add_loki_root_to_profile,
+    configure_ollama_binding,
+    detect_package_manager,
+    detect_shell_profile,
+    get_local_ip,
+    install_docker,
+    install_ollama,
+    install_packages,
+    is_installed,
+    is_ollama_binding_configured,
+    loki_root_already_exported,
+    start_avahi_publish,
+    stop_avahi_publish,
 )
 
 
@@ -121,13 +137,10 @@ def setup() -> None:
         if missing_cmds:
             missing_pkgs = [pkg_map[cmd] for cmd in missing_cmds]
             click.echo(f"\nMissing packages: {', '.join(missing_pkgs)}")
-            if click.confirm(
-                f"Install with sudo {manager}?", default=True
-            ):
+            if click.confirm(f"Install with sudo {manager}?", default=True):
                 if not install_packages(missing_pkgs, manager):
                     click.echo(
-                        "Warning: package installation failed. "
-                        "See README for manual instructions.",
+                        "Warning: package installation failed. See README for manual instructions.",
                         err=True,
                     )
                 else:
@@ -144,9 +157,7 @@ def setup() -> None:
     # Install Docker
     if not is_installed("docker"):
         click.echo("\nDocker is not installed.")
-        if click.confirm(
-            "Install Docker via the official script with sudo?", default=True
-        ):
+        if click.confirm("Install Docker via the official script with sudo?", default=True):
             if install_docker():
                 click.echo("Docker installed.")
                 click.echo(
@@ -155,8 +166,7 @@ def setup() -> None:
                 )
             else:
                 click.echo(
-                    "Warning: Docker installation failed. "
-                    "See README for manual instructions.",
+                    "Warning: Docker installation failed. See README for manual instructions.",
                     err=True,
                 )
         else:
@@ -170,8 +180,7 @@ def setup() -> None:
                 click.echo("Ollama installed.")
             else:
                 click.echo(
-                    "Warning: Ollama installation failed. "
-                    "See README for manual instructions.",
+                    "Warning: Ollama installation failed. See README for manual instructions.",
                     err=True,
                 )
         else:
@@ -179,10 +188,7 @@ def setup() -> None:
 
     # Configure Ollama network binding
     if not is_ollama_binding_configured():
-        click.echo(
-            "\nOllama is not configured to bind to all interfaces "
-            "(required for Docker)."
-        )
+        click.echo("\nOllama is not configured to bind to all interfaces (required for Docker).")
         if click.confirm(
             "Configure Ollama binding with sudo (creates systemd override)?",
             default=True,
@@ -204,9 +210,7 @@ def setup() -> None:
         profile = detect_shell_profile()
         if not loki_root_already_exported(profile, current_root):
             click.echo(f"\nLOKI_ROOT is not set to {current_root}.")
-            if click.confirm(
-                f"Add `export LOKI_ROOT={current_root}` to {profile}?", default=True
-            ):
+            if click.confirm(f"Add `export LOKI_ROOT={current_root}` to {profile}?", default=True):
                 if add_loki_root_to_profile(profile, current_root):
                     click.echo(
                         f"Added. Run `source {profile}` or open a new terminal "
@@ -315,9 +319,7 @@ def start() -> None:
                     err=True,
                 )
     else:
-        click.echo(
-            f"Note: {hostname} does not use .local TLD; skipping mDNS broadcast."
-        )
+        click.echo(f"Note: {hostname} does not use .local TLD; skipping mDNS broadcast.")
 
 
 @cli.command()
@@ -363,8 +365,7 @@ def cleanup() -> None:
     if kiwix.exists():
         expected_zims = {Path(entry.url).name for entry in config.kiwix_files}
         orphaned_zims = sorted(
-            f for f in kiwix.iterdir()
-            if f.suffix == ".zim" and f.name not in expected_zims
+            f for f in kiwix.iterdir() if f.suffix == ".zim" and f.name not in expected_zims
         )
     else:
         orphaned_zims = []
@@ -383,9 +384,7 @@ def cleanup() -> None:
         click.echo("No orphaned ZIM files found.")
 
     # Ollama models
-    result = subprocess.run(
-        ["ollama", "list"], capture_output=True, text=True, check=False
-    )
+    result = subprocess.run(["ollama", "list"], capture_output=True, text=True, check=False)
     installed = _parse_ollama_list(result.stdout)
     orphaned_models = sorted(set(installed) - set(config.ollama_models))
 

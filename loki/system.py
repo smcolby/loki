@@ -86,8 +86,10 @@ def install_docker() -> bool:
     bool
         ``True`` if the install script exited with code 0, ``False`` otherwise.
     """
-    result = subprocess.run(
-        "curl -fsSL https://get.docker.com | sh", shell=True, check=False  # noqa: S602
+    result = subprocess.run(  # noqa: S602
+        "curl -fsSL https://get.docker.com | sh",
+        shell=True,
+        check=False,
     )
     if result.returncode != 0:
         return False
@@ -108,8 +110,10 @@ def install_ollama() -> bool:
     bool
         ``True`` if the install script exited with code 0, ``False`` otherwise.
     """
-    result = subprocess.run(
-        "curl -fsSL https://ollama.com/install.sh | sh", shell=True, check=False  # noqa: S602
+    result = subprocess.run(  # noqa: S602
+        "curl -fsSL https://ollama.com/install.sh | sh",
+        shell=True,
+        check=False,
     )
     return result.returncode == 0
 
@@ -142,19 +146,17 @@ def configure_ollama_binding() -> bool:
         ``True`` if all four subprocess steps (mkdir, tee, daemon-reload,
         restart) exit with code 0, ``False`` at the first failure.
     """
-    result = subprocess.run(
-        ["sudo", "mkdir", "-p", str(_OLLAMA_OVERRIDE_DIR)], check=False
-    )
+    result = subprocess.run(["sudo", "mkdir", "-p", str(_OLLAMA_OVERRIDE_DIR)], check=False)
     if result.returncode != 0:
         return False
-    result = subprocess.run(
+    tee = subprocess.run(
         ["sudo", "tee", str(_OLLAMA_OVERRIDE_FILE)],
         input=_OLLAMA_OVERRIDE_CONTENT,
         text=True,
         capture_output=True,
         check=False,
     )
-    if result.returncode != 0:
+    if tee.returncode != 0:
         return False
     result = subprocess.run(["sudo", "systemctl", "daemon-reload"], check=False)
     if result.returncode != 0:
@@ -241,9 +243,7 @@ def get_local_ip() -> str:
         produces no output or raises an ``OSError``.
     """
     try:
-        result = subprocess.run(
-            ["hostname", "-I"], capture_output=True, text=True, check=False
-        )
+        result = subprocess.run(["hostname", "-I"], capture_output=True, text=True, check=False)
         ips = result.stdout.strip().split()
         return ips[0] if ips else ""
     except OSError:

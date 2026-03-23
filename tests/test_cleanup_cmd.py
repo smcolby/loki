@@ -5,8 +5,7 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
-from loki.cli import cli, _parse_ollama_list
-from loki.config import LokiConfig
+from loki.cli import _parse_ollama_list, cli
 
 
 def _ollama_list_output(*model_names: str) -> str:
@@ -29,6 +28,7 @@ def _ollama_list_output(*model_names: str) -> str:
 
 # --- _parse_ollama_list unit tests ---
 
+
 def test_parse_ollama_list_returns_model_names():
     """Model names are extracted from the first column of each data row."""
     output = _ollama_list_output("llama3:8b", "mistral:7b")
@@ -46,6 +46,7 @@ def test_parse_ollama_list_returns_empty_for_blank_output():
 
 
 # --- ZIM file cleanup tests ---
+
 
 def test_cleanup_no_orphaned_zims_prints_message(mocker, sample_config, tmp_path):
     """Cleanup prints a message when there are no orphaned ZIM files on disk."""
@@ -135,6 +136,7 @@ def test_cleanup_handles_missing_kiwix_dir(mocker, sample_config, tmp_path):
 
 # --- Ollama model cleanup tests ---
 
+
 def test_cleanup_no_orphaned_models_prints_message(mocker, sample_config, tmp_path):
     """Cleanup prints a message when all installed models are in the config."""
     mocker.patch("loki.cli.load_config", return_value=sample_config)
@@ -199,9 +201,7 @@ def test_cleanup_skips_model_removal_on_deny(mocker, sample_config, tmp_path):
     mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path)
     list_result = mocker.MagicMock(spec=subprocess.CompletedProcess)
     list_result.stdout = _ollama_list_output("llama3:8b", "mistral:7b")
-    mock_run = mocker.patch(
-        "loki.cli.subprocess.run", autospec=True, return_value=list_result
-    )
+    mock_run = mocker.patch("loki.cli.subprocess.run", autospec=True, return_value=list_result)
 
     CliRunner().invoke(cli, ["cleanup"], input="n\n")
 

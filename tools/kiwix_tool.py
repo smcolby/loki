@@ -17,6 +17,7 @@ the container image if it is not already present.
 import urllib.parse
 
 import requests
+
 try:
     from bs4 import BeautifulSoup
 except ImportError as exc:
@@ -83,13 +84,18 @@ class Tools:
             print("Successfully retrieved search result titles.")
 
             formatted_results = "\n".join(results[:_MAX_SEARCH_RESULTS])
-            return f"Found the following articles. Use the read_articles tool with the exact Path to read up to {_MAX_ARTICLES_PER_CALL} of them:\n{formatted_results}"
+            return (
+                f"Found the following articles. Use the read_articles tool with the exact"
+                f" Path to read up to {_MAX_ARTICLES_PER_CALL} of them:\n{formatted_results}"
+            )
 
         except requests.exceptions.RequestException as e:
             print(f"Failed to connect to the local server: {e}.")
             return "Search failed due to a network error."
+
     def read_articles(self, paths: list[str]) -> str:
-        """Fetch the full text of up to ``_MAX_ARTICLES_PER_CALL`` articles from the local Kiwix database.
+        """Fetch the full text of up to ``_MAX_ARTICLES_PER_CALL`` articles from the local
+        Kiwix database.
 
         Pass the exact paths returned by the search_article_titles tool.
 
@@ -125,7 +131,8 @@ class Tools:
 
                 clean_text = " ".join(soup.stripped_strings)
                 combined_text.append(
-                    f"--- START OF ARTICLE: {path} ---\n{clean_text[:_MAX_ARTICLE_CHARS]}\n--- END OF ARTICLE ---"
+                    f"--- START OF ARTICLE: {path} ---\n"
+                    f"{clean_text[:_MAX_ARTICLE_CHARS]}\n--- END OF ARTICLE ---"
                 )
 
             except requests.exceptions.RequestException as e:

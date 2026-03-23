@@ -130,6 +130,7 @@ def test_start_warns_on_failed_model_pull(mocker, sample_config):
 # mDNS / avahi-publish-address
 # ---------------------------------------------------------------------------
 
+
 def test_start_broadcasts_mdns_for_local_url(mocker, sample_config):
     """The start command spawns avahi-publish-address when the URL ends in .local."""
     mocker.patch("loki.cli.load_config", return_value=sample_config)
@@ -199,8 +200,7 @@ def test_start_warns_when_avahi_publish_not_installed(mocker, sample_config):
     mocker.patch("loki.cli.requests.get", autospec=True, return_value=mock_response)
     mocker.patch("loki.cli.subprocess.run", autospec=True)
     # avahi-publish-address missing; all other tools present
-    mocker.patch("loki.cli.is_installed",
-                 side_effect=lambda cmd: cmd != "avahi-publish-address")
+    mocker.patch("loki.cli.is_installed", side_effect=lambda cmd: cmd != "avahi-publish-address")
     mock_avahi = mocker.patch("loki.cli.start_avahi_publish")
 
     result = CliRunner().invoke(cli, ["start"])

@@ -40,8 +40,11 @@ def test_stop_kills_avahi_process(mocker):
 def test_stop_avahi_called_before_compose_down(mocker):
     """The stop command terminates avahi-publish before stopping Docker Compose."""
     call_order = []
-    mocker.patch("loki.cli.subprocess.run", autospec=True,
-                 side_effect=lambda *a, **kw: call_order.append("compose"))
+    mocker.patch(
+        "loki.cli.subprocess.run",
+        autospec=True,
+        side_effect=lambda *a, **kw: call_order.append("compose"),
+    )
     mocker.patch(
         "loki.cli.stop_avahi_publish",
         side_effect=lambda *a, **kw: call_order.append("avahi"),

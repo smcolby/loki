@@ -6,10 +6,15 @@ import pytest
 from pydantic import ValidationError
 
 from loki.config import (
-    build_caddyfile, build_env_file, caddyfile_path, env_file_path,
-    kiwix_dir, load_config,
-    KiwixFile, LokiConfig, PortsConfig,
     REPO_ROOT,
+    LokiConfig,
+    PortsConfig,
+    build_caddyfile,
+    build_env_file,
+    caddyfile_path,
+    env_file_path,
+    kiwix_dir,
+    load_config,
 )
 
 
