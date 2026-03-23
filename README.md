@@ -7,6 +7,7 @@
 Whether you're working air-gapped, want to keep queries off the cloud, or just want an always-available research assistant, `loki` runs entirely on your own hardware with no external dependencies at runtime.
 
 > **Linux only.** `loki` targets Linux systems with systemd. `loki setup` installs and configures all prerequisites automatically.
+
 > **Bring your own drivers.** We're going to leave GPU driver installation up to you as well (ideally _before_ installing `loki`).
 
 ## Prerequisites
@@ -47,7 +48,7 @@ ollama_models:
   - qwen3.5:9b
 ```
 
-The defaults work out of the box. Edit `kiwix_files` (datasets [here](https://download.kiwix.org/zim/)) and `ollama_models` (models [here](https://ollama.com/search))to match what you want downloaded. `loki setup` generates the `Caddyfile` and `.env` automatically — do not edit those files by hand.
+The defaults work out of the box. Edit `kiwix_files` (datasets [here](https://download.kiwix.org/zim/)) and `ollama_models` (models [here](https://ollama.com/search)) to match what you want downloaded. `loki setup` generates the `Caddyfile` and `.env` automatically — do not edit those files by hand.
 
 ## Setup
 
@@ -64,7 +65,7 @@ This will:
 3. **Install Docker** via the official convenience script and add your user to the `docker` group.
 4. **Install Ollama** via the official install script.
 5. **Configure Ollama network binding** — creates a systemd override so Ollama listens on all interfaces (required for Docker containers to reach it via `host.docker.internal`).
-6. **Add ``loki`_ROOT` to your shell profile** so `loki` commands work from any directory.
+6. **Add `LOKI_ROOT` to your shell profile** so `loki` commands work from any directory.
 7. **Generate the `Caddyfile` and `.env`** from your configuration.
 8. **Download ZIM files** listed in `kiwix_files` using aria2.
 
@@ -111,7 +112,7 @@ The default `url: loki.local` uses the `.local` TLD, which is broadcast via **mD
 
 If you prefer a non-`.local` hostname (e.g. `loki.home`), set it in `config.yaml` and add a static entry to `/etc/hosts` on each client device — the mDNS broadcast is skipped automatically for non-`.local` hostnames.
 
-### `LOKI_ROOT
+### `LOKI_ROOT`
 
 By default, loki resolves all paths (`config.yaml`, `Caddyfile`, `.env`, `data/kiwix/`) relative to the current working directory. Run every `loki` command from the repository root, or set `LOKI_ROOT` to point elsewhere:
 
