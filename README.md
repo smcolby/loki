@@ -1,3 +1,5 @@
+![banner](assets/banner.jpg)
+
 # loki
 Local Offline Knowledge Index
 
