@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-loki (Local Offline Knowledge Index) is a Python CLI tool that manages a local LLM and offline Wikipedia knowledge server orchestrated via Docker. The stack consists of Open WebUI, Kiwix, and Caddy, orchestrated by `docker-compose.yml`. Ollama runs as a native host service (not in Docker).
+loki (Local Offline Knowledge Index) is a Python CLI tool that manages a local LLM and offline Wikipedia knowledge server orchestrated via Docker. The stack consists of Open WebUI, Kiwix, and Caddy, orchestrated by `compose.yaml`. Ollama runs as a native host service (not in Docker).
 
 ## Architecture
 
