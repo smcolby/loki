@@ -10,7 +10,7 @@ _OLLAMA_OVERRIDE_DIR = Path("/etc/systemd/system/ollama.service.d")
 _OLLAMA_OVERRIDE_FILE = _OLLAMA_OVERRIDE_DIR / "override.conf"
 _OLLAMA_OVERRIDE_CONTENT = '[Service]\nEnvironment="OLLAMA_HOST=0.0.0.0"\n'
 
-# Package names indexed by package manager and the command they provide.
+# Package names indexed by package manager and the command they provide
 PACKAGE_MAP: dict[str, dict[str, str]] = {
     "apt-get": {
         "aria2c": "aria2",
@@ -26,7 +26,13 @@ PACKAGE_MAP: dict[str, dict[str, str]] = {
 
 
 def detect_package_manager() -> str | None:
-    """Return 'apt-get' or 'dnf' if found on PATH, else None."""
+    """Return the first supported package manager found on PATH.
+
+    Returns
+    -------
+    str or None
+        ``'apt-get'`` or ``'dnf'`` if found, otherwise ``None``.
+    """
     for mgr in ("apt-get", "dnf"):
         if shutil.which(mgr):
             return mgr
@@ -34,22 +40,51 @@ def detect_package_manager() -> str | None:
 
 
 def is_installed(cmd: str) -> bool:
-    """Return True if ``cmd`` is found on PATH."""
+    """Return whether ``cmd`` is available on PATH.
+
+    Parameters
+    ----------
+    cmd : str
+        The command name to look up (e.g. ``"docker"``).
+
+    Returns
+    -------
+    bool
+        ``True`` if ``cmd`` resolves to an executable on PATH, ``False`` otherwise.
+    """
     return shutil.which(cmd) is not None
 
 
 def install_packages(pkgs: list[str], manager: str) -> bool:
-    """Install ``pkgs`` using ``manager`` with sudo. Returns True on success."""
+    """Install ``pkgs`` using ``manager`` under sudo.
+
+    Parameters
+    ----------
+    pkgs : list of str
+        Package names to install (e.g. ``["aria2", "avahi-utils"]``).
+    manager : str
+        The package manager to use (e.g. ``"apt-get"`` or ``"dnf"``).
+
+    Returns
+    -------
+    bool
+        ``True`` if the installation command exited with code 0, ``False`` otherwise.
+    """
     result = subprocess.run(["sudo", manager, "install", "-y"] + pkgs, check=False)
     return result.returncode == 0
 
 
 def install_docker() -> bool:
-    """Install Docker via the official convenience script. Returns True on success.
+    """Install Docker via the official convenience script.
 
-    ``shell=True`` is intentional — the official Docker installer is a shell
+    Uses ``shell=True`` intentionally — the official Docker installer is a shell
     pipeline from a vendor-controlled URL with no user-supplied input.
     After installation, adds the current user to the ``docker`` group.
+
+    Returns
+    -------
+    bool
+        ``True`` if the install script exited with code 0, ``False`` otherwise.
     """
     result = subprocess.run(
         "curl -fsSL https://get.docker.com | sh", shell=True, check=False  # noqa: S602
@@ -63,10 +98,15 @@ def install_docker() -> bool:
 
 
 def install_ollama() -> bool:
-    """Install Ollama via the official install script. Returns True on success.
+    """Install Ollama via the official install script.
 
-    ``shell=True`` is intentional — the official Ollama installer is a shell
+    Uses ``shell=True`` intentionally — the official Ollama installer is a shell
     pipeline from a vendor-controlled URL with no user-supplied input.
+
+    Returns
+    -------
+    bool
+        ``True`` if the install script exited with code 0, ``False`` otherwise.
     """
     result = subprocess.run(
         "curl -fsSL https://ollama.com/install.sh | sh", shell=True, check=False  # noqa: S602
@@ -75,7 +115,14 @@ def install_ollama() -> bool:
 
 
 def is_ollama_binding_configured() -> bool:
-    """Return True if the Ollama systemd override already sets OLLAMA_HOST."""
+    """Return whether the Ollama systemd override already sets ``OLLAMA_HOST``.
+
+    Returns
+    -------
+    bool
+        ``True`` if the override file exists and contains ``OLLAMA_HOST=0.0.0.0``,
+        ``False`` otherwise (including on permission or file-not-found errors).
+    """
     try:
         return "OLLAMA_HOST=0.0.0.0" in _OLLAMA_OVERRIDE_FILE.read_text()
     except (FileNotFoundError, PermissionError):
@@ -86,7 +133,14 @@ def configure_ollama_binding() -> bool:
     """Create the Ollama systemd override and restart the service.
 
     Uses ``sudo mkdir`` and ``sudo tee`` to write the override file without
-    requiring a shell redirect. Returns True on success.
+    requiring a shell redirect. Reloads the systemd daemon before restarting
+    so the new environment variable takes effect.
+
+    Returns
+    -------
+    bool
+        ``True`` if all four subprocess steps (mkdir, tee, daemon-reload,
+        restart) exit with code 0, ``False`` at the first failure.
     """
     result = subprocess.run(
         ["sudo", "mkdir", "-p", str(_OLLAMA_OVERRIDE_DIR)], check=False
@@ -114,6 +168,11 @@ def detect_shell_profile() -> Path:
 
     Prefers ``~/.zshrc`` for zsh, ``~/.bashrc`` for bash, and falls back to
     ``~/.profile`` for any other shell.
+
+    Returns
+    -------
+    Path
+        Absolute path to the shell profile file for the current user.
     """
     shell = os.environ.get("SHELL", "")
     home = Path.home()
@@ -125,7 +184,21 @@ def detect_shell_profile() -> Path:
 
 
 def loki_root_already_exported(profile: Path, root: Path) -> bool:
-    """Return True if the exact LOKI_ROOT export line is already in ``profile``."""
+    """Return whether the exact ``LOKI_ROOT`` export line is already in ``profile``.
+
+    Parameters
+    ----------
+    profile : Path
+        Path to the shell profile file to inspect.
+    root : Path
+        The ``LOKI_ROOT`` value whose export line to search for.
+
+    Returns
+    -------
+    bool
+        ``True`` if ``export LOKI_ROOT=<root>`` is found in ``profile``,
+        ``False`` otherwise (including on missing or unreadable files).
+    """
     export_line = f"export LOKI_ROOT={root}"
     try:
         return export_line in profile.read_text()
@@ -134,7 +207,21 @@ def loki_root_already_exported(profile: Path, root: Path) -> bool:
 
 
 def add_loki_root_to_profile(profile: Path, root: Path) -> bool:
-    """Append ``export LOKI_ROOT=<root>`` to ``profile``. Returns True on success."""
+    """Append ``export LOKI_ROOT=<root>`` to ``profile``.
+
+    Parameters
+    ----------
+    profile : Path
+        Path to the shell profile file to append to.
+    root : Path
+        The directory path to export as ``LOKI_ROOT``.
+
+    Returns
+    -------
+    bool
+        ``True`` if the line was written successfully, ``False`` on any
+        ``OSError`` (e.g., permission denied).
+    """
     export_line = f"\nexport LOKI_ROOT={root}\n"
     try:
         with open(profile, "a") as f:
@@ -145,7 +232,14 @@ def add_loki_root_to_profile(profile: Path, root: Path) -> bool:
 
 
 def get_local_ip() -> str:
-    """Return the first IP address from ``hostname -I``, or empty string on failure."""
+    """Return the first IP address reported by ``hostname -I``.
+
+    Returns
+    -------
+    str
+        The primary local IP address, or an empty string if ``hostname -I``
+        produces no output or raises an ``OSError``.
+    """
     try:
         result = subprocess.run(
             ["hostname", "-I"], capture_output=True, text=True, check=False
@@ -157,15 +251,26 @@ def get_local_ip() -> str:
 
 
 def start_avahi_publish(hostname: str, ip: str, pid_file: Path) -> None:
-    """Spawn ``avahi-publish-address`` in the background and save its PID.
+    """Spawn ``avahi-publish-address`` in the background and record its PID.
 
     Kills any existing process from a stale PID file before spawning a new one.
     stdout and stderr are redirected to ``/dev/null`` to suppress terminal output.
 
-    Note: ``avahi-publish-address -R <hostname> <ip>`` publishes an A record
-    (hostname → IP), distinct from ``avahi-publish-host-name`` which registers
-    the machine's own system hostname. Using address publication keeps the
-    announced name fully controlled by ``config.url``.
+    Parameters
+    ----------
+    hostname : str
+        The mDNS hostname to advertise (e.g. ``"loki.local"``).
+    ip : str
+        The IP address to associate with ``hostname``.
+    pid_file : Path
+        File path where the spawned process PID is written.
+
+    Notes
+    -----
+    Uses ``avahi-publish-address -R <hostname> <ip>``, which publishes a DNS A
+    record (hostname → IP). This is distinct from ``avahi-publish-host-name``,
+    which registers the machine's own system hostname. Using address publication
+    keeps the announced name fully controlled by ``config.url``.
     """
     stop_avahi_publish(pid_file)
     proc = subprocess.Popen(
@@ -178,16 +283,21 @@ def start_avahi_publish(hostname: str, ip: str, pid_file: Path) -> None:
 
 
 def stop_avahi_publish(pid_file: Path) -> None:
-    """Send SIGTERM to the avahi-publish process if it is still alive.
+    """Send SIGTERM to the avahi-publish process recorded in ``pid_file``.
 
     Checks liveness with ``os.kill(pid, 0)`` before sending the signal.
-    Handles stale or missing PID files gracefully.
+    Handles stale or missing PID files gracefully without raising.
+
+    Parameters
+    ----------
+    pid_file : Path
+        Path to the PID file written by ``start_avahi_publish``.
     """
     if not pid_file.exists():
         return
     try:
         pid = int(pid_file.read_text().strip())
-        os.kill(pid, 0)  # Raises ProcessLookupError if process is dead.
+        os.kill(pid, 0)  # Raises ProcessLookupError if process is dead
         os.kill(pid, signal.SIGTERM)
     except (ValueError, ProcessLookupError, PermissionError, OSError):
         pass

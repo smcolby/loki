@@ -6,7 +6,7 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel
 
-# Only accurate for editable installs; kept for backward-compatibility with tests.
+# Only accurate for editable installs; kept for backward-compatibility with tests
 REPO_ROOT = Path(__file__).parent.parent
 
 
@@ -16,6 +16,11 @@ def _default_root() -> Path:
     Checks the ``LOKI_ROOT`` environment variable first, then falls back to
     the current working directory. This makes loki work correctly whether
     installed as an editable package or a standard wheel.
+
+    Returns
+    -------
+    Path
+        The resolved root directory as an absolute ``Path``.
     """
     env = os.environ.get("LOKI_ROOT")
     return Path(env) if env else Path.cwd()
@@ -107,27 +112,57 @@ def load_config(path: Path | None = None) -> LokiConfig:
 
 
 def kiwix_dir() -> Path:
-    """Return the path to the kiwix data directory under ``LOKI_ROOT``."""
+    """Return the path to the kiwix data directory under ``LOKI_ROOT``.
+
+    Returns
+    -------
+    Path
+        ``<LOKI_ROOT>/data/kiwix``
+    """
     return _default_root() / "data" / "kiwix"
 
 
 def caddyfile_path() -> Path:
-    """Return the path to the Caddyfile under ``LOKI_ROOT``."""
+    """Return the path to the Caddyfile under ``LOKI_ROOT``.
+
+    Returns
+    -------
+    Path
+        ``<LOKI_ROOT>/Caddyfile``
+    """
     return _default_root() / "Caddyfile"
 
 
 def env_file_path() -> Path:
-    """Return the path to the generated .env file under ``LOKI_ROOT``."""
+    """Return the path to the generated ``.env`` file under ``LOKI_ROOT``.
+
+    Returns
+    -------
+    Path
+        ``<LOKI_ROOT>/.env``
+    """
     return _default_root() / ".env"
 
 
 def loki_root() -> Path:
-    """Return the working root directory (``LOKI_ROOT`` env var or ``cwd``)."""
+    """Return the working root directory (``LOKI_ROOT`` env var or ``cwd``).
+
+    Returns
+    -------
+    Path
+        The resolved root directory; equivalent to ``_default_root()``.
+    """
     return _default_root()
 
 
 def avahi_pid_file() -> Path:
-    """Return the path to the avahi-publish PID file under ``LOKI_ROOT``."""
+    """Return the path to the avahi-publish PID file under ``LOKI_ROOT``.
+
+    Returns
+    -------
+    Path
+        ``<LOKI_ROOT>/.avahi.pid``
+    """
     return _default_root() / ".avahi.pid"
 
 

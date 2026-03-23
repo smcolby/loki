@@ -23,7 +23,17 @@ from loki.system import (
 def _require_tool(name: str) -> None:
     """Exit with a clear message if ``name`` is not found on PATH.
 
-    Provides a better UX than letting subprocess raise a raw FileNotFoundError.
+    Provides better UX than letting subprocess raise a raw ``FileNotFoundError``.
+
+    Parameters
+    ----------
+    name : str
+        The command name to look up on PATH (e.g. ``"docker"``).
+
+    Raises
+    ------
+    SystemExit
+        If ``name`` is not found on PATH.
     """
     if shutil.which(name) is None:
         raise SystemExit(f"Error: '{name}' is not installed or not on PATH.")
@@ -83,10 +93,17 @@ def cli() -> None:
 
 @cli.command()
 def setup() -> None:
-    """Generate the Caddyfile, write port settings, and download missing ZIM files."""
+    """Run the interactive loki setup wizard.
+
+    Walks through six steps in order: config review, system-package installation
+    (aria2, avahi-daemon, avahi-utils), Docker installation, Ollama installation,
+    Ollama network-binding configuration, and ``LOKI_ROOT`` shell-profile export.
+    After all system steps, writes the Caddyfile and ``.env`` port configuration
+    and downloads any ZIM files listed in ``config.yaml``.
+    """
     config = load_config()
 
-    # Step 0: Review configuration before proceeding.
+    # Review configuration before proceeding
     config_path = loki_root() / "config.yaml"
     try:
         click.echo(f"Configuration ({config_path}):\n")
@@ -96,7 +113,7 @@ def setup() -> None:
     if not click.confirm("Proceed with this configuration?", default=True):
         raise SystemExit(f"Edit {config_path} and run `loki setup` again.")
 
-    # Step 1: System packages (aria2, avahi-daemon, avahi-utils).
+    # Install system packages (aria2, avahi-daemon, avahi-utils)
     manager = detect_package_manager()
     if manager:
         pkg_map = PACKAGE_MAP[manager]
@@ -124,7 +141,7 @@ def setup() -> None:
             err=True,
         )
 
-    # Step 2: Docker.
+    # Install Docker
     if not is_installed("docker"):
         click.echo("\nDocker is not installed.")
         if click.confirm(
@@ -145,7 +162,7 @@ def setup() -> None:
         else:
             click.echo("Skipping — see README for manual instructions.")
 
-    # Step 3: Ollama.
+    # Install Ollama
     if not is_installed("ollama"):
         click.echo("\nOllama is not installed.")
         if click.confirm("Install Ollama via the official script?", default=True):
@@ -160,7 +177,7 @@ def setup() -> None:
         else:
             click.echo("Skipping — see README for manual instructions.")
 
-    # Step 4: Ollama network binding.
+    # Configure Ollama network binding
     if not is_ollama_binding_configured():
         click.echo(
             "\nOllama is not configured to bind to all interfaces "
@@ -181,7 +198,7 @@ def setup() -> None:
         else:
             click.echo("Skipping — see README for manual instructions.")
 
-    # Step 5: LOKI_ROOT in shell profile.
+    # Add LOKI_ROOT to shell profile
     current_root = loki_root()
     if os.environ.get("LOKI_ROOT") != str(current_root):
         profile = detect_shell_profile()
@@ -249,7 +266,7 @@ def setup() -> None:
 
 @cli.command()
 def start() -> None:
-    """Pull Ollama models and start the Docker Compose stack."""
+    """Pull Ollama models, start the Docker Compose stack, and broadcast mDNS."""
     _require_tool("ollama")
     _require_tool("docker")
     config = load_config()
@@ -335,7 +352,7 @@ def cleanup() -> None:
     _require_tool("ollama")
     config = load_config()
 
-    # ZIM files.
+    # ZIM files
     kiwix = kiwix_dir()
     if kiwix.exists():
         expected_zims = {Path(entry.url).name for entry in config.kiwix_files}
@@ -359,7 +376,7 @@ def cleanup() -> None:
     else:
         click.echo("No orphaned ZIM files found.")
 
-    # Ollama models.
+    # Ollama models
     result = subprocess.run(
         ["ollama", "list"], capture_output=True, text=True, check=False
     )

@@ -62,19 +62,17 @@ class Tools:
         url = f"{self.base_url}/search?pattern={safe_query}"
 
         try:
-            # Send a network request to retrieve the search results page.
             response = requests.get(url, timeout=15)
             response.raise_for_status()
 
             soup = BeautifulSoup(response.text, "html.parser")
             results = []
 
-            # Extract links from the search results.
             for a_tag in soup.find_all("a", href=True):
                 href = a_tag["href"]
                 title = a_tag.get_text(strip=True)
 
-                # Filter out standard Kiwix UI links and pagination.
+                # Exclude Kiwix UI chrome and pagination links from results
                 if title and not href.startswith(("?", "/search", "/skin", "/catalog")):
                     results.append(f"Title: {title} | Path: {href}")
 
@@ -84,14 +82,12 @@ class Tools:
 
             print("Successfully retrieved search result titles.")
 
-            # Return the top results for the model to evaluate.
             formatted_results = "\n".join(results[:_MAX_SEARCH_RESULTS])
             return f"Found the following articles. Use the read_articles tool with the exact Path to read up to {_MAX_ARTICLES_PER_CALL} of them:\n{formatted_results}"
 
         except requests.exceptions.RequestException as e:
             print(f"Failed to connect to the local server: {e}.")
             return "Search failed due to a network error."
-
     def read_articles(self, paths: list[str]) -> str:
         """Fetch the full text of up to ``_MAX_ARTICLES_PER_CALL`` articles from the local Kiwix database.
 
@@ -108,7 +104,7 @@ class Tools:
         str
             Concatenated article text, with each article wrapped in start/end markers.
         """
-        # Limit to a batch of _MAX_ARTICLES_PER_CALL articles.
+        # Respect the configured per-call article limit
         path_list = paths[:_MAX_ARTICLES_PER_CALL]
         combined_text = []
 
