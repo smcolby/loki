@@ -110,12 +110,12 @@ The default `url: loki.local` uses the `.local` TLD, which is broadcast via **mD
 
 If you prefer a non-`.local` hostname (e.g. `loki.home`), set it in `config.yaml` and add a static entry to `/etc/hosts` on each client device — the mDNS broadcast is skipped automatically for non-`.local` hostnames.
 
-### `loki`_ROOT
+### `LOKI_ROOT
 
-By default, loki resolves all paths (`config.yaml`, `Caddyfile`, `.env`, `data/kiwix/`) relative to the current working directory. Run every `loki` command from the repository root, or set ``loki`_ROOT` to point elsewhere:
+By default, loki resolves all paths (`config.yaml`, `Caddyfile`, `.env`, `data/kiwix/`) relative to the current working directory. Run every `loki` command from the repository root, or set `LOKI_ROOT` to point elsewhere:
 
 ```bash
-export `loki`_ROOT=/path/to/loki
+export LOKI_ROOT=/path/to/loki
 loki setup
 ```
 
