@@ -291,7 +291,10 @@ def start() -> None:
             )
 
     click.echo("Starting Docker Compose stack ...")
-    subprocess.run(["docker", "compose", "up", "-d"], check=False)
+    subprocess.run(
+        ["docker", "compose", "--project-directory", str(loki_root()), "up", "-d"],
+        check=False,
+    )
 
     hostname = config.url
     if hostname.endswith(".local"):
@@ -323,7 +326,10 @@ def stop() -> None:
     _require_tool("docker")
     stop_avahi_publish(avahi_pid_file())
     click.echo("Stopping Docker Compose stack ...")
-    subprocess.run(["docker", "compose", "down"], check=False)
+    subprocess.run(
+        ["docker", "compose", "--project-directory", str(loki_root()), "down"],
+        check=False,
+    )
 
 
 @cli.command()

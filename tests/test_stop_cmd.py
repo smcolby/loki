@@ -11,7 +11,11 @@ def test_stop_calls_docker_compose_down(mocker):
 
     CliRunner().invoke(cli, ["stop"])
 
-    mock_run.assert_called_once_with(["docker", "compose", "down"], check=False)
+    cmd = mock_run.call_args.args[0]
+    assert cmd[:2] == ["docker", "compose"]
+    assert "--project-directory" in cmd
+    assert cmd[-1] == "down"
+    assert mock_run.call_args.kwargs == {"check": False}
 
 
 def test_stop_prints_message(mocker):

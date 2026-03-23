@@ -21,7 +21,7 @@ def test_start_pulls_models_and_runs_compose(mocker, sample_config):
 
     calls = mock_run.call_args_list
     assert any(call.args[0] == ["ollama", "pull", "llama3:8b"] for call in calls)
-    assert any(call.args[0] == ["docker", "compose", "up", "-d"] for call in calls)
+    assert any("compose" in call.args[0] and "up" in call.args[0] for call in calls)
 
 
 def test_start_compose_called_after_model_pull(mocker, sample_config):
@@ -86,7 +86,7 @@ def test_start_still_runs_compose_when_ollama_offline(mocker, sample_config):
     CliRunner().invoke(cli, ["start"])
 
     commands = [call.args[0] for call in mock_run.call_args_list]
-    assert ["docker", "compose", "up", "-d"] in commands
+    assert any("compose" in cmd and "up" in cmd and "-d" in cmd for cmd in commands)
 
 
 def test_start_no_models_skips_pull(mocker):
