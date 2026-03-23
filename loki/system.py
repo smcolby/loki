@@ -102,7 +102,9 @@ def configure_ollama_binding() -> bool:
     )
     if result.returncode != 0:
         return False
-    subprocess.run(["sudo", "systemctl", "daemon-reload"], check=False)
+    result = subprocess.run(["sudo", "systemctl", "daemon-reload"], check=False)
+    if result.returncode != 0:
+        return False
     result = subprocess.run(["sudo", "systemctl", "restart", "ollama"], check=False)
     return result.returncode == 0
 

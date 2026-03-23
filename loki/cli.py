@@ -278,15 +278,22 @@ def start() -> None:
 
     hostname = config.url
     if hostname.endswith(".local"):
-        ip = get_local_ip()
-        if ip:
-            start_avahi_publish(hostname, ip, avahi_pid_file())
-            click.echo(f"Broadcasting {hostname} via mDNS (avahi-publish-address).")
-        else:
+        if not is_installed("avahi-publish-address"):
             click.echo(
-                "Warning: could not determine local IP; skipping mDNS broadcast.",
+                "Warning: avahi-publish-address not found; skipping mDNS broadcast. "
+                "Run `loki setup` to install avahi-utils.",
                 err=True,
             )
+        else:
+            ip = get_local_ip()
+            if ip:
+                start_avahi_publish(hostname, ip, avahi_pid_file())
+                click.echo(f"Broadcasting {hostname} via mDNS (avahi-publish-address).")
+            else:
+                click.echo(
+                    "Warning: could not determine local IP; skipping mDNS broadcast.",
+                    err=True,
+                )
     else:
         click.echo(
             f"Note: {hostname} does not use .local TLD; skipping mDNS broadcast."

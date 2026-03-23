@@ -189,3 +189,22 @@ def test_start_skips_mdns_and_warns_when_ip_unavailable(mocker, sample_config):
 
     mock_avahi.assert_not_called()
     assert "Warning" in result.output
+
+
+def test_start_warns_when_avahi_publish_not_installed(mocker, sample_config):
+    """The start command warns and skips mDNS when avahi-publish-address is absent."""
+    mocker.patch("loki.cli.load_config", return_value=sample_config)
+    mock_response = mocker.MagicMock(spec=requests.Response)
+    mock_response.status_code = 200
+    mocker.patch("loki.cli.requests.get", autospec=True, return_value=mock_response)
+    mocker.patch("loki.cli.subprocess.run", autospec=True)
+    # avahi-publish-address missing; all other tools present
+    mocker.patch("loki.cli.is_installed",
+                 side_effect=lambda cmd: cmd != "avahi-publish-address")
+    mock_avahi = mocker.patch("loki.cli.start_avahi_publish")
+
+    result = CliRunner().invoke(cli, ["start"])
+
+    mock_avahi.assert_not_called()
+    assert "Warning" in result.output
+    assert "avahi-publish-address" in result.output

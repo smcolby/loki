@@ -107,13 +107,15 @@ def test_install_packages_runs_correct_command(mocker):
 
 def test_install_packages_returns_true_on_success(mocker):
     """install_packages returns True when subprocess exits with 0."""
-    mocker.patch("loki.system.subprocess.run", return_value=MagicMock(returncode=0))
+    mocker.patch("loki.system.subprocess.run", autospec=True,
+                 return_value=MagicMock(spec=subprocess.CompletedProcess, returncode=0))
     assert install_packages(["aria2"], "apt-get") is True
 
 
 def test_install_packages_returns_false_on_failure(mocker):
     """install_packages returns False when subprocess exits non-zero."""
-    mocker.patch("loki.system.subprocess.run", return_value=MagicMock(returncode=1))
+    mocker.patch("loki.system.subprocess.run", autospec=True,
+                 return_value=MagicMock(spec=subprocess.CompletedProcess, returncode=1))
     assert install_packages(["aria2"], "apt-get") is False
 
 
@@ -123,8 +125,8 @@ def test_install_packages_returns_false_on_failure(mocker):
 
 def test_install_docker_runs_convenience_script(mocker):
     """install_docker executes the official Docker convenience script."""
-    mock_run = mocker.patch("loki.system.subprocess.run",
-                            return_value=MagicMock(returncode=0))
+    mock_run = mocker.patch("loki.system.subprocess.run", autospec=True,
+                            return_value=MagicMock(spec=subprocess.CompletedProcess, returncode=0))
     mocker.patch.dict(os.environ, {"USER": "testuser"})
     install_docker()
     first_call = mock_run.call_args_list[0]
@@ -134,8 +136,8 @@ def test_install_docker_runs_convenience_script(mocker):
 
 def test_install_docker_adds_user_to_docker_group(mocker):
     """install_docker runs usermod to add the current user to the docker group."""
-    mock_run = mocker.patch("loki.system.subprocess.run",
-                            return_value=MagicMock(returncode=0))
+    mock_run = mocker.patch("loki.system.subprocess.run", autospec=True,
+                            return_value=MagicMock(spec=subprocess.CompletedProcess, returncode=0))
     mocker.patch.dict(os.environ, {"USER": "testuser"})
     install_docker()
     calls_args = [call[0][0] for call in mock_run.call_args_list]
@@ -144,7 +146,8 @@ def test_install_docker_adds_user_to_docker_group(mocker):
 
 def test_install_docker_returns_false_on_failure(mocker):
     """install_docker returns False when the script exits non-zero."""
-    mocker.patch("loki.system.subprocess.run", return_value=MagicMock(returncode=1))
+    mocker.patch("loki.system.subprocess.run", autospec=True,
+                 return_value=MagicMock(spec=subprocess.CompletedProcess, returncode=1))
     assert install_docker() is False
 
 
@@ -154,8 +157,8 @@ def test_install_docker_returns_false_on_failure(mocker):
 
 def test_install_ollama_runs_official_script(mocker):
     """install_ollama executes the official Ollama install script."""
-    mock_run = mocker.patch("loki.system.subprocess.run",
-                            return_value=MagicMock(returncode=0))
+    mock_run = mocker.patch("loki.system.subprocess.run", autospec=True,
+                            return_value=MagicMock(spec=subprocess.CompletedProcess, returncode=0))
     install_ollama()
     call_args = mock_run.call_args
     assert "ollama.com/install.sh" in call_args[0][0]
@@ -164,13 +167,15 @@ def test_install_ollama_runs_official_script(mocker):
 
 def test_install_ollama_returns_true_on_success(mocker):
     """install_ollama returns True when the script exits with 0."""
-    mocker.patch("loki.system.subprocess.run", return_value=MagicMock(returncode=0))
+    mocker.patch("loki.system.subprocess.run", autospec=True,
+                 return_value=MagicMock(spec=subprocess.CompletedProcess, returncode=0))
     assert install_ollama() is True
 
 
 def test_install_ollama_returns_false_on_failure(mocker):
     """install_ollama returns False when the script exits non-zero."""
-    mocker.patch("loki.system.subprocess.run", return_value=MagicMock(returncode=1))
+    mocker.patch("loki.system.subprocess.run", autospec=True,
+                 return_value=MagicMock(spec=subprocess.CompletedProcess, returncode=1))
     assert install_ollama() is False
 
 
@@ -206,8 +211,8 @@ def test_is_ollama_binding_configured_false_when_content_differs(tmp_path, mocke
 
 def test_configure_ollama_binding_creates_override_and_restarts(mocker):
     """configure_ollama_binding creates the override dir, writes the file, and restarts ollama."""
-    mock_run = mocker.patch("loki.system.subprocess.run",
-                            return_value=MagicMock(returncode=0))
+    mock_run = mocker.patch("loki.system.subprocess.run", autospec=True,
+                            return_value=MagicMock(spec=subprocess.CompletedProcess, returncode=0))
     configure_ollama_binding()
     calls_args = [call[0][0] for call in mock_run.call_args_list]
     assert any("mkdir" in str(args) for args in calls_args)
@@ -218,7 +223,22 @@ def test_configure_ollama_binding_creates_override_and_restarts(mocker):
 
 def test_configure_ollama_binding_returns_false_on_mkdir_failure(mocker):
     """configure_ollama_binding returns False when mkdir fails."""
-    mocker.patch("loki.system.subprocess.run", return_value=MagicMock(returncode=1))
+    mocker.patch("loki.system.subprocess.run", autospec=True,
+                 return_value=MagicMock(spec=subprocess.CompletedProcess, returncode=1))
+    assert configure_ollama_binding() is False
+
+
+def test_configure_ollama_binding_returns_false_on_daemon_reload_failure(mocker):
+    """configure_ollama_binding returns False when daemon-reload fails."""
+    mocker.patch(
+        "loki.system.subprocess.run",
+        autospec=True,
+        side_effect=[
+            MagicMock(spec=subprocess.CompletedProcess, returncode=0),  # mkdir
+            MagicMock(spec=subprocess.CompletedProcess, returncode=0),  # tee
+            MagicMock(spec=subprocess.CompletedProcess, returncode=1),  # daemon-reload
+        ],
+    )
     assert configure_ollama_binding() is False
 
 
@@ -304,14 +324,16 @@ def test_add_loki_root_to_profile_returns_false_on_error(tmp_path):
 
 def test_get_local_ip_returns_first_ip(mocker):
     """Returns the first IP address from hostname -I output."""
-    mocker.patch("loki.system.subprocess.run",
-                 return_value=MagicMock(stdout="192.168.1.5 10.0.0.1 "))
+    mocker.patch("loki.system.subprocess.run", autospec=True,
+                 return_value=MagicMock(spec=subprocess.CompletedProcess,
+                                        stdout="192.168.1.5 10.0.0.1 "))
     assert get_local_ip() == "192.168.1.5"
 
 
 def test_get_local_ip_returns_empty_on_blank_output(mocker):
     """Returns an empty string when hostname -I produces no output."""
-    mocker.patch("loki.system.subprocess.run", return_value=MagicMock(stdout=""))
+    mocker.patch("loki.system.subprocess.run", autospec=True,
+                 return_value=MagicMock(spec=subprocess.CompletedProcess, stdout=""))
     assert get_local_ip() == ""
 
 
