@@ -1,5 +1,7 @@
 """Shared pytest fixtures for the loki test suite."""
 
+from pathlib import Path
+
 import pytest
 
 from loki.config import KiwixFile, LokiConfig, PortsConfig
@@ -31,3 +33,21 @@ def _stub_shutil_which(mocker):
     _require_tool can override this by re-patching shutil.which to None.
     """
     mocker.patch("loki.cli.shutil.which", return_value="/usr/bin/stub")
+
+
+@pytest.fixture(autouse=True)
+def _stub_system(mocker):
+    """Stub loki.system functions so setup tests run without real system changes.
+
+    Functions are patched at their usage site (loki.cli.*) since cli.py imports
+    them with ``from loki.system import ...``. Individual tests can override
+    these stubs to exercise specific prompt branches.
+    """
+    mocker.patch("loki.cli.is_installed", return_value=True)
+    mocker.patch("loki.cli.detect_package_manager", return_value="apt-get")
+    mocker.patch("loki.cli.is_ollama_binding_configured", return_value=True)
+    mocker.patch("loki.cli.detect_shell_profile", return_value=Path.home() / ".bashrc")
+    mocker.patch("loki.cli.loki_root_already_exported", return_value=True)
+    mocker.patch("loki.cli.get_local_ip", return_value="192.168.1.100")
+    mocker.patch("loki.cli.start_avahi_publish")
+    mocker.patch("loki.cli.stop_avahi_publish")

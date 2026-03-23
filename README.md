@@ -3,42 +3,15 @@ Local Offline Knowledge Index
 
 A CLI tool for managing a local LLM and offline Wikipedia knowledge server orchestrated via Docker.
 
+> **Linux only.** loki targets Linux systems with systemd. `loki setup` installs and configures all prerequisites automatically.
+
 ## Prerequisites
 
-### System dependencies
+- A Linux system with systemd
+- `pipx` for isolated Python package installation
+- `curl` (for the Docker and Ollama installers)
 
-- [Docker](https://docs.docker.com/get-docker/) with the Compose plugin
-- [Ollama](https://ollama.com/) installed and running as a native system service
-- [aria2](https://aria2.github.io/) for multi-threaded ZIM file downloads
-
-  ```bash
-  # macOS
-  brew install aria2
-
-  # Debian/Ubuntu
-  sudo apt install aria2
-  ```
-
-### Ollama network binding (Linux only)
-
-By default, Ollama on Linux binds to `127.0.0.1`. Docker containers contact the host via `host.docker.internal`, which requires Ollama to listen on all interfaces. Create a systemd override to set `OLLAMA_HOST`:
-
-```bash
-sudo systemctl edit ollama
-```
-
-Add the following lines, then save and close the editor:
-
-```ini
-[Service]
-Environment="OLLAMA_HOST=0.0.0.0"
-```
-
-Restart the service:
-
-```bash
-sudo systemctl restart ollama
-```
+Everything else — Docker, Ollama, aria2, avahi-daemon — is installed automatically by `loki setup`.
 
 ## Installation
 
@@ -50,7 +23,7 @@ pipx install -e .
 
 ## Configuration
 
-Edit `config.yaml` to define the server URL, which ZIM files to download, and which Ollama models to pull:
+Edit `config.yaml` before running `loki setup`:
 
 ```yaml
 url: loki.local              # Hostname used to reach the server on your local network.
@@ -72,6 +45,14 @@ ollama_models:
 
 `loki setup` generates the `Caddyfile` and `.env` automatically — do not edit them by hand.
 
+### Local hostname resolution
+
+Using the `.local` TLD (the default) means the hostname is broadcast via **mDNS** and resolves on your LAN without any router configuration. `loki setup` installs `avahi-daemon` and `avahi-utils` automatically.
+
+When `loki start` runs, it spawns `avahi-publish-address` in the background to announce the configured hostname. The announcement is active for as long as the stack is running, and is terminated by `loki stop`.
+
+If you prefer a different TLD (e.g. `loki.home`), set `url: loki.home` in `config.yaml` and add a static entry to `/etc/hosts` on each client device. The mDNS broadcast is skipped automatically for non-`.local` hostnames.
+
 ### LOKI_ROOT
 
 By default, loki resolves all paths (`config.yaml`, `Caddyfile`, `.env`, `data/kiwix/`) relative to the **current working directory**. Run every `loki` command from the repository root, or set `LOKI_ROOT` to an explicit path:
@@ -81,56 +62,45 @@ export LOKI_ROOT=/path/to/loki
 loki setup
 ```
 
-This also makes loki work correctly when installed as a non-editable wheel.
+`loki setup` can add this export to your shell profile automatically.
 
-### Local hostname resolution (no router changes required)
+## Setup
 
-Using the `.local` TLD (the default) means the hostname is broadcast via **mDNS** and resolves on your LAN without any router configuration. Most modern operating systems support mDNS natively:
+Run `loki setup` once after cloning the repository. It will:
 
-- **macOS** — Bonjour is built in; `.local` names resolve automatically.
-- **Windows 10+** — mDNS is supported natively.
-- **Linux** — requires `avahi-daemon` (usually pre-installed on desktop distros).
-  ```bash
-  sudo apt install avahi-daemon       # Debian/Ubuntu
-  sudo dnf install avahi              # Fedora
-  ```
+1. **Display `config.yaml`** and ask you to confirm before proceeding.
+2. **Install system packages** (aria2, avahi-daemon, avahi-utils) via `apt-get` or `dnf`.
+3. **Install Docker** via the official convenience script and add your user to the `docker` group.
+4. **Install Ollama** via the official install script.
+5. **Configure Ollama network binding** — creates a systemd override so Ollama listens on all interfaces (required for Docker containers to reach it via `host.docker.internal`).
+6. **Add `LOKI_ROOT` to your shell profile** so `loki` commands work from any directory.
+7. **Generate the `Caddyfile` and `.env`** from your configuration.
+8. **Download ZIM files** listed in `kiwix_files` using aria2.
 
-For `loki.local` to resolve on other devices on your network, the **host machine** needs to announce the name. On Linux, install `avahi-utils` and register the alias:
+For each step you will be prompted `[Y/n]`. If you decline a step, loki prints a notice and skips it — you will need to complete that step manually before the stack will function correctly.
 
-```bash
-sudo apt install avahi-utils
-avahi-publish-address -R loki.local $(hostname -I | awk '{print $1}')
-```
+> **If you prefer to set up manually**, consult the [Docker installation docs](https://docs.docker.com/engine/install/), the [Ollama Linux guide](https://ollama.com/download/linux), and the systemd override instructions below.
 
-To make this permanent, create a service file at `/etc/avahi/services/loki.service`:
+### Manual Ollama network binding
 
-```xml
-<?xml version="1.0" standalone='no'?>
-<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
-<service-group>
-  <name>loki</name>
-  <service>
-    <type>_http._tcp</type>
-    <port>80</port>
-  </service>
-</service-group>
-```
-
-On macOS, `dns-sd` can register the name:
+If you skipped step 5, create the override manually:
 
 ```bash
-dns-sd -P loki _http._tcp local 80 loki.local $(ipconfig getifaddr en0)
+sudo mkdir -p /etc/systemd/system/ollama.service.d
+sudo tee /etc/systemd/system/ollama.service.d/override.conf <<'EOF'
+[Service]
+Environment="OLLAMA_HOST=0.0.0.0"
+EOF
+sudo systemctl daemon-reload
+sudo systemctl restart ollama
 ```
-
-If you prefer a different TLD (e.g. `loki.home`), simply set `url: loki.home` in `config.yaml` and add a static entry to the `/etc/hosts` file on each client device instead.
-
 
 ## Usage
 
 ```
-loki setup    Generate the Caddyfile, write port settings, and download missing ZIM files.
-loki start    Pull Ollama models and start the Docker Compose stack.
-loki stop     Stop the Docker Compose stack.
+loki setup    Install prerequisites, generate config files, and download ZIM files.
+loki start    Pull Ollama models, start the Docker Compose stack, and broadcast hostname via mDNS.
+loki stop     Stop the Docker Compose stack and terminate the mDNS broadcast.
 loki status   Check the health of running services.
 loki cleanup  Remove ZIM files and Ollama models no longer listed in config.
 ```

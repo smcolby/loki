@@ -121,6 +121,16 @@ def env_file_path() -> Path:
     return _default_root() / ".env"
 
 
+def loki_root() -> Path:
+    """Return the working root directory (``LOKI_ROOT`` env var or ``cwd``)."""
+    return _default_root()
+
+
+def avahi_pid_file() -> Path:
+    """Return the path to the avahi-publish PID file under ``LOKI_ROOT``."""
+    return _default_root() / ".avahi.pid"
+
+
 def build_caddyfile(caddy_url: str) -> str:
     """Return the Caddyfile content that routes a URL to Open WebUI.
 

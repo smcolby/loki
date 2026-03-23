@@ -10,7 +10,13 @@ import requests
 
 from loki.config import (
     load_config, kiwix_dir, caddyfile_path, build_caddyfile,
-    env_file_path, build_env_file,
+    env_file_path, build_env_file, loki_root, avahi_pid_file,
+)
+from loki.system import (
+    detect_package_manager, is_installed, install_packages, PACKAGE_MAP,
+    install_docker, install_ollama, is_ollama_binding_configured,
+    configure_ollama_binding, detect_shell_profile, loki_root_already_exported,
+    add_loki_root_to_profile, get_local_ip, start_avahi_publish, stop_avahi_publish,
 )
 
 
@@ -58,27 +64,15 @@ def _ollama_warning(port: int) -> str:
     Returns
     -------
     str
-        Multi-line warning with instructions for resolving common connectivity
-        issues on Linux systemd environments.
+        Multi-line warning with instructions for resolving connectivity issues.
     """
     return (
         f"Warning: Ollama does not appear to be running at http://localhost:{port}.\n"
-        "Ensure the Ollama service is active before starting the stack.\n"
+        "Ensure the Ollama service is active: sudo systemctl start ollama\n"
         "\n"
-        "On Linux, Ollama binds to 127.0.0.1 by default. Docker containers reach it\n"
-        "via host.docker.internal, which requires Ollama to listen on all interfaces.\n"
-        "To fix this, create a systemd override:\n"
-        "\n"
-        "    sudo systemctl edit ollama\n"
-        "\n"
-        "Add the following lines, then save and close the editor:\n"
-        "\n"
-        "    [Service]\n"
-        '    Environment="OLLAMA_HOST=0.0.0.0"\n'
-        "\n"
-        "Then restart the service:\n"
-        "\n"
-        "    sudo systemctl restart ollama\n"
+        "Ollama binds to 127.0.0.1 by default; Docker containers reach it via\n"
+        "host.docker.internal, which requires Ollama to listen on all interfaces.\n"
+        "Run `loki setup` to configure the OLLAMA_HOST systemd override automatically.\n"
     )
 
 
@@ -91,6 +85,126 @@ def cli() -> None:
 def setup() -> None:
     """Generate the Caddyfile, write port settings, and download missing ZIM files."""
     config = load_config()
+
+    # Step 0: Review configuration before proceeding.
+    config_path = loki_root() / "config.yaml"
+    try:
+        click.echo(f"Configuration ({config_path}):\n")
+        click.echo(config_path.read_text())
+    except OSError:
+        pass
+    if not click.confirm("Proceed with this configuration?", default=True):
+        raise SystemExit(f"Edit {config_path} and run `loki setup` again.")
+
+    # Step 1: System packages (aria2, avahi-daemon, avahi-utils).
+    manager = detect_package_manager()
+    if manager:
+        pkg_map = PACKAGE_MAP[manager]
+        missing_cmds = [cmd for cmd in pkg_map if not is_installed(cmd)]
+        if missing_cmds:
+            missing_pkgs = [pkg_map[cmd] for cmd in missing_cmds]
+            click.echo(f"\nMissing packages: {', '.join(missing_pkgs)}")
+            if click.confirm(
+                f"Install with sudo {manager}?", default=True
+            ):
+                if not install_packages(missing_pkgs, manager):
+                    click.echo(
+                        "Warning: package installation failed. "
+                        "See README for manual instructions.",
+                        err=True,
+                    )
+                else:
+                    click.echo("Packages installed.")
+            else:
+                click.echo("Skipping — see README for manual instructions.")
+    else:
+        click.echo(
+            "Warning: no supported package manager found (apt-get, dnf). "
+            "Install aria2, avahi-daemon, and avahi-utils manually.",
+            err=True,
+        )
+
+    # Step 2: Docker.
+    if not is_installed("docker"):
+        click.echo("\nDocker is not installed.")
+        if click.confirm(
+            "Install Docker via the official script with sudo?", default=True
+        ):
+            if install_docker():
+                click.echo("Docker installed.")
+                click.echo(
+                    "Note: log out and back in (or run `newgrp docker`) "
+                    "before using docker without sudo."
+                )
+            else:
+                click.echo(
+                    "Warning: Docker installation failed. "
+                    "See README for manual instructions.",
+                    err=True,
+                )
+        else:
+            click.echo("Skipping — see README for manual instructions.")
+
+    # Step 3: Ollama.
+    if not is_installed("ollama"):
+        click.echo("\nOllama is not installed.")
+        if click.confirm("Install Ollama via the official script?", default=True):
+            if install_ollama():
+                click.echo("Ollama installed.")
+            else:
+                click.echo(
+                    "Warning: Ollama installation failed. "
+                    "See README for manual instructions.",
+                    err=True,
+                )
+        else:
+            click.echo("Skipping — see README for manual instructions.")
+
+    # Step 4: Ollama network binding.
+    if not is_ollama_binding_configured():
+        click.echo(
+            "\nOllama is not configured to bind to all interfaces "
+            "(required for Docker)."
+        )
+        if click.confirm(
+            "Configure Ollama binding with sudo (creates systemd override)?",
+            default=True,
+        ):
+            if configure_ollama_binding():
+                click.echo("Ollama binding configured.")
+            else:
+                click.echo(
+                    "Warning: Ollama binding configuration failed. "
+                    "See README for manual instructions.",
+                    err=True,
+                )
+        else:
+            click.echo("Skipping — see README for manual instructions.")
+
+    # Step 5: LOKI_ROOT in shell profile.
+    current_root = loki_root()
+    if os.environ.get("LOKI_ROOT") != str(current_root):
+        profile = detect_shell_profile()
+        if not loki_root_already_exported(profile, current_root):
+            click.echo(f"\nLOKI_ROOT is not set to {current_root}.")
+            if click.confirm(
+                f"Add `export LOKI_ROOT={current_root}` to {profile}?", default=True
+            ):
+                if add_loki_root_to_profile(profile, current_root):
+                    click.echo(
+                        f"Added. Run `source {profile}` or open a new terminal "
+                        "for it to take effect."
+                    )
+                else:
+                    click.echo(
+                        f"Warning: could not write to {profile}. "
+                        f"Add manually: export LOKI_ROOT={current_root}",
+                        err=True,
+                    )
+            else:
+                click.echo("Skipping — see README for manual instructions.")
+
+    click.echo("")
 
     caddyfile_path().write_text(build_caddyfile(config.url))
     click.echo(f"Caddyfile written for http://{config.url}")
@@ -162,11 +276,28 @@ def start() -> None:
     click.echo("Starting Docker Compose stack ...")
     subprocess.run(["docker", "compose", "up", "-d"], check=False)
 
+    hostname = config.url
+    if hostname.endswith(".local"):
+        ip = get_local_ip()
+        if ip:
+            start_avahi_publish(hostname, ip, avahi_pid_file())
+            click.echo(f"Broadcasting {hostname} via mDNS (avahi-publish-address).")
+        else:
+            click.echo(
+                "Warning: could not determine local IP; skipping mDNS broadcast.",
+                err=True,
+            )
+    else:
+        click.echo(
+            f"Note: {hostname} does not use .local TLD; skipping mDNS broadcast."
+        )
+
 
 @cli.command()
 def stop() -> None:
     """Stop the Docker Compose stack."""
     _require_tool("docker")
+    stop_avahi_publish(avahi_pid_file())
     click.echo("Stopping Docker Compose stack ...")
     subprocess.run(["docker", "compose", "down"], check=False)
 

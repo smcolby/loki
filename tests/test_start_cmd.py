@@ -1,4 +1,4 @@
-"""Tests for the start subcommand — Ollama health check, model pull, and compose up."""
+"""Tests for the start subcommand — Ollama health check, model pull, compose up, and mDNS."""
 
 import subprocess
 
@@ -124,3 +124,68 @@ def test_start_warns_on_failed_model_pull(mocker, sample_config):
 
     assert "Warning" in result.output
     assert "llama3:8b" in result.output
+
+
+# ---------------------------------------------------------------------------
+# mDNS / avahi-publish-address
+# ---------------------------------------------------------------------------
+
+def test_start_broadcasts_mdns_for_local_url(mocker, sample_config):
+    """The start command spawns avahi-publish-address when the URL ends in .local."""
+    mocker.patch("loki.cli.load_config", return_value=sample_config)
+    mock_response = mocker.MagicMock(spec=requests.Response)
+    mock_response.status_code = 200
+    mocker.patch("loki.cli.requests.get", autospec=True, return_value=mock_response)
+    mocker.patch("loki.cli.subprocess.run", autospec=True)
+    mock_avahi = mocker.patch("loki.cli.start_avahi_publish")
+
+    CliRunner().invoke(cli, ["start"])
+
+    mock_avahi.assert_called_once()
+
+
+def test_start_avahi_called_with_correct_hostname(mocker, sample_config):
+    """The start command calls start_avahi_publish with the configured URL."""
+    mocker.patch("loki.cli.load_config", return_value=sample_config)
+    mock_response = mocker.MagicMock(spec=requests.Response)
+    mock_response.status_code = 200
+    mocker.patch("loki.cli.requests.get", autospec=True, return_value=mock_response)
+    mocker.patch("loki.cli.subprocess.run", autospec=True)
+    mock_avahi = mocker.patch("loki.cli.start_avahi_publish")
+
+    CliRunner().invoke(cli, ["start"])
+
+    call_args = mock_avahi.call_args
+    assert call_args[0][0] == "loki.local"
+
+
+def test_start_skips_mdns_for_non_local_url(mocker):
+    """The start command skips avahi-publish-address when the URL does not end in .local."""
+    config = LokiConfig(url="loki.home")
+    mocker.patch("loki.cli.load_config", return_value=config)
+    mock_response = mocker.MagicMock(spec=requests.Response)
+    mock_response.status_code = 200
+    mocker.patch("loki.cli.requests.get", autospec=True, return_value=mock_response)
+    mocker.patch("loki.cli.subprocess.run", autospec=True)
+    mock_avahi = mocker.patch("loki.cli.start_avahi_publish")
+
+    result = CliRunner().invoke(cli, ["start"])
+
+    mock_avahi.assert_not_called()
+    assert "skipping mdns broadcast" in result.output.lower()
+
+
+def test_start_skips_mdns_and_warns_when_ip_unavailable(mocker, sample_config):
+    """The start command warns and skips mDNS when no local IP can be determined."""
+    mocker.patch("loki.cli.load_config", return_value=sample_config)
+    mock_response = mocker.MagicMock(spec=requests.Response)
+    mock_response.status_code = 200
+    mocker.patch("loki.cli.requests.get", autospec=True, return_value=mock_response)
+    mocker.patch("loki.cli.subprocess.run", autospec=True)
+    mocker.patch("loki.cli.get_local_ip", return_value="")
+    mock_avahi = mocker.patch("loki.cli.start_avahi_publish")
+
+    result = CliRunner().invoke(cli, ["start"])
+
+    mock_avahi.assert_not_called()
+    assert "Warning" in result.output
