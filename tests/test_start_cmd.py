@@ -73,6 +73,44 @@ def test_start_warns_when_ollama_offline(mocker, sample_config):
     assert "OLLAMA_HOST" in result.output
 
 
+def test_start_warns_when_ollama_not_network_reachable(mocker, sample_config):
+    """The start command warns when Ollama is running on localhost but not on the LAN IP."""
+    mocker.patch("loki.cli.load_config", return_value=sample_config)
+    # conftest stubs get_local_ip to "192.168.1.100"
+    ok = mocker.MagicMock(spec=requests.Response)
+    ok.status_code = 200
+    # Localhost Ollama check succeeds; LAN IP network check fails.
+    mocker.patch(
+        "loki.cli.requests.get",
+        autospec=True,
+        side_effect=[ok, requests.exceptions.ConnectionError("refused")],
+    )
+    mocker.patch("loki.cli.subprocess.run", autospec=True)
+
+    result = CliRunner().invoke(cli, ["start"])
+
+    assert "Warning" in result.output
+    assert "127.0.0.1" in result.output
+    assert "OLLAMA_HOST=0.0.0.0" in result.output
+
+
+def test_start_no_network_warning_when_ollama_offline(mocker, sample_config):
+    """The start command does not emit a network binding warning when Ollama is fully offline."""
+    mocker.patch("loki.cli.load_config", return_value=sample_config)
+    mocker.patch(
+        "loki.cli.requests.get",
+        autospec=True,
+        side_effect=requests.exceptions.ConnectionError,
+    )
+    mocker.patch("loki.cli.subprocess.run", autospec=True)
+
+    result = CliRunner().invoke(cli, ["start"])
+
+    # The general offline warning mentions OLLAMA_HOST but the specific network
+    # binding warning ("bound to 127.0.0.1 only") should not appear.
+    assert "bound to 127.0.0.1 only" not in result.output
+
+
 def test_start_still_runs_compose_when_ollama_offline(mocker, sample_config):
     """The start command still runs docker compose up -d even when Ollama is unreachable."""
     mocker.patch("loki.cli.load_config", return_value=sample_config)

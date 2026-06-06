@@ -102,6 +102,32 @@ def _ollama_warning(port: int) -> str:
     )
 
 
+def _ollama_network_reachable(port: int, local_ip: str) -> bool:
+    """Return whether Ollama is reachable via the host's LAN IP address.
+
+    Connecting over the LAN IP (rather than loopback) mirrors what Docker
+    containers do via ``host.docker.internal``. A False result means Ollama
+    is bound to 127.0.0.1 only and containers cannot reach it.
+
+    Parameters
+    ----------
+    port : int
+        The port Ollama is configured to listen on.
+    local_ip : str
+        The host's primary LAN IP address.
+
+    Returns
+    -------
+    bool
+        ``True`` if Ollama responds with HTTP 200 on the LAN IP, ``False`` otherwise.
+    """
+    try:
+        r = requests.get(f"http://{local_ip}:{port}/api/tags", timeout=5)
+        return r.status_code == 200
+    except requests.exceptions.RequestException:
+        return False
+
+
 @click.group()
 def cli() -> None:
     """Manage the loki local LLM and offline knowledge server."""
@@ -152,6 +178,8 @@ def setup() -> None:
                     click.echo("Packages installed.")
             else:
                 click.echo("Skipping — see README for manual instructions.")
+        else:
+            click.echo("System packages already installed (aria2, avahi-daemon, avahi-utils).")
     else:
         click.echo(
             "Warning: no supported package manager found (apt-get, dnf). "
@@ -176,6 +204,8 @@ def setup() -> None:
                 )
         else:
             click.echo("Skipping — see README for manual instructions.")
+    else:
+        click.echo("Docker already installed.")
 
     # Install Ollama
     if not is_installed("ollama"):
@@ -190,6 +220,8 @@ def setup() -> None:
                 )
         else:
             click.echo("Skipping — see README for manual instructions.")
+    else:
+        click.echo("Ollama already installed.")
 
     # Configure Ollama network binding
     if not is_ollama_binding_configured():
@@ -208,6 +240,8 @@ def setup() -> None:
                 )
         else:
             click.echo("Skipping — see README for manual instructions.")
+    else:
+        click.echo("Ollama binding already configured (OLLAMA_HOST=0.0.0.0).")
 
     # Add LOKI_ROOT to shell profile
     current_root = loki_root()
@@ -229,6 +263,10 @@ def setup() -> None:
                     )
             else:
                 click.echo("Skipping — see README for manual instructions.")
+        else:
+            click.echo(f"LOKI_ROOT already in {profile}; source it or open a new terminal.")
+    else:
+        click.echo(f"LOKI_ROOT already set to {current_root}.")
 
     click.echo("")
 
@@ -289,6 +327,16 @@ def start() -> None:
 
     if not ollama_online:
         click.echo(_ollama_warning(config.ports.ollama), err=True)
+    else:
+        local_ip = get_local_ip()
+        if local_ip and not _ollama_network_reachable(config.ports.ollama, local_ip):
+            click.echo(
+                f"Warning: Ollama is running but not reachable at http://{local_ip}:{config.ports.ollama}.\n"
+                "It is likely bound to 127.0.0.1 only — Docker containers will not be able to reach it.\n"
+                "Run `loki setup` to configure the OLLAMA_HOST=0.0.0.0 systemd override, then:\n"
+                "  sudo systemctl restart ollama",
+                err=True,
+            )
 
     for model in config.ollama_models:
         click.echo(f"Pulling Ollama model: {model}")
@@ -343,20 +391,66 @@ def stop() -> None:
 def status() -> None:
     """Check the health of running services."""
     config = load_config()
-    endpoints = [
-        ("Ollama", f"http://localhost:{config.ports.ollama}/api/tags"),
-        ("Kiwix", f"http://localhost:{config.ports.kiwix}"),
-    ]
     click.echo("Checking service status ...")
-    for label, url in endpoints:
-        try:
-            response = requests.get(url, timeout=5)
-            if response.status_code == 200:
-                click.echo(f"  {label}: ONLINE ({url})")
+
+    # Ollama — reachable on loopback
+    ollama_url = f"http://localhost:{config.ports.ollama}/api/tags"
+    try:
+        r = requests.get(ollama_url, timeout=5)
+        ollama_online = r.status_code == 200
+        if ollama_online:
+            click.echo(f"  Ollama: ONLINE ({ollama_url})")
+        else:
+            click.echo(f"  Ollama: OFFLINE — HTTP {r.status_code} ({ollama_url})")
+    except requests.exceptions.RequestException as exc:
+        ollama_online = False
+        click.echo(f"  Ollama: OFFLINE — {exc} ({ollama_url})")
+
+    # Ollama — reachable on LAN IP (mirrors how Docker containers connect)
+    local_ip = get_local_ip()
+    if local_ip:
+        network_url = f"http://{local_ip}:{config.ports.ollama}/api/tags"
+        if _ollama_network_reachable(config.ports.ollama, local_ip):
+            click.echo(f"  Ollama (network): ONLINE ({network_url})")
+        else:
+            click.echo(f"  Ollama (network): OFFLINE ({network_url})")
+            if ollama_online:
+                click.echo(
+                    "    Ollama is bound to 127.0.0.1 only — Docker containers cannot reach it.\n"
+                    "    Run `loki setup` to configure OLLAMA_HOST=0.0.0.0, then:\n"
+                    "      sudo systemctl restart ollama"
+                )
+    else:
+        click.echo("  Ollama (network): SKIP — could not determine local IP")
+
+    # Kiwix
+    kiwix_url = f"http://localhost:{config.ports.kiwix}"
+    try:
+        r = requests.get(kiwix_url, timeout=5)
+        if r.status_code == 200:
+            click.echo(f"  Kiwix: ONLINE ({kiwix_url})")
+        else:
+            click.echo(f"  Kiwix: OFFLINE — HTTP {r.status_code} ({kiwix_url})")
+    except requests.exceptions.RequestException as exc:
+        click.echo(f"  Kiwix: OFFLINE — {exc} ({kiwix_url})")
+
+    # Docker containers
+    if shutil.which("docker"):
+        for name in ("loki-open-webui", "loki-caddy", "loki-kiwix"):
+            result = subprocess.run(
+                ["docker", "inspect", "--format", "{{.State.Status}}", name],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0:
+                state = result.stdout.strip()
+                label = "RUNNING" if state == "running" else f"NOT RUNNING ({state})"
+                click.echo(f"  {name}: {label}")
             else:
-                click.echo(f"  {label}: OFFLINE — HTTP {response.status_code} ({url})")
-        except requests.exceptions.RequestException as exc:
-            click.echo(f"  {label}: OFFLINE — {exc} ({url})")
+                click.echo(f"  {name}: NOT FOUND")
+    else:
+        click.echo("  Docker: not installed")
 
 
 @cli.command()
