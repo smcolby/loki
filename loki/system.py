@@ -8,7 +8,8 @@ from pathlib import Path
 
 _OLLAMA_OVERRIDE_DIR = Path("/etc/systemd/system/ollama.service.d")
 _OLLAMA_OVERRIDE_FILE = _OLLAMA_OVERRIDE_DIR / "override.conf"
-_OLLAMA_OVERRIDE_CONTENT = '[Service]\nEnvironment="OLLAMA_HOST=0.0.0.0"\n'
+# Ollama >=0.30.5 requires the explicit port in OLLAMA_HOST; address-only no longer works.
+_OLLAMA_OVERRIDE_CONTENT = '[Service]\nEnvironment="OLLAMA_HOST=0.0.0.0:11434"\n'
 
 # Package names indexed by package manager and the command they provide
 PACKAGE_MAP: dict[str, dict[str, str]] = {
@@ -119,16 +120,20 @@ def install_ollama() -> bool:
 
 
 def is_ollama_binding_configured() -> bool:
-    """Return whether the Ollama systemd override already sets ``OLLAMA_HOST``.
+    """Return whether the Ollama systemd override sets ``OLLAMA_HOST`` with an explicit port.
+
+    Checks for the ``host:port`` form required by Ollama >=0.30.5. An override
+    containing only ``OLLAMA_HOST=0.0.0.0`` (no port) is treated as not configured
+    so that ``loki setup`` rewrites it to the correct format.
 
     Returns
     -------
     bool
-        ``True`` if the override file exists and contains ``OLLAMA_HOST=0.0.0.0``,
+        ``True`` if the override file exists and contains ``OLLAMA_HOST=0.0.0.0:11434``,
         ``False`` otherwise (including on permission or file-not-found errors).
     """
     try:
-        return "OLLAMA_HOST=0.0.0.0" in _OLLAMA_OVERRIDE_FILE.read_text()
+        return "OLLAMA_HOST=0.0.0.0:11434" in _OLLAMA_OVERRIDE_FILE.read_text()
     except (FileNotFoundError, PermissionError):
         return False
 

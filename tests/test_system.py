@@ -213,11 +213,23 @@ def test_install_ollama_returns_false_on_failure(mocker):
 
 
 def test_is_ollama_binding_configured_true_when_override_exists(tmp_path, mocker):
-    """Returns True when the override file contains OLLAMA_HOST=0.0.0.0."""
+    """Returns True when the override file contains OLLAMA_HOST=0.0.0.0:11434."""
+    override_file = tmp_path / "override.conf"
+    override_file.write_text('[Service]\nEnvironment="OLLAMA_HOST=0.0.0.0:11434"\n')
+    mocker.patch.object(system, "_OLLAMA_OVERRIDE_FILE", override_file)
+    assert is_ollama_binding_configured() is True
+
+
+def test_is_ollama_binding_configured_false_when_port_missing(tmp_path, mocker):
+    """Returns False when the override sets OLLAMA_HOST without an explicit port.
+
+    Ollama >=0.30.5 requires the host:port form; address-only is treated as
+    not configured so loki setup rewrites it to the correct format.
+    """
     override_file = tmp_path / "override.conf"
     override_file.write_text('[Service]\nEnvironment="OLLAMA_HOST=0.0.0.0"\n')
     mocker.patch.object(system, "_OLLAMA_OVERRIDE_FILE", override_file)
-    assert is_ollama_binding_configured() is True
+    assert is_ollama_binding_configured() is False
 
 
 def test_is_ollama_binding_configured_false_when_file_missing(tmp_path, mocker):

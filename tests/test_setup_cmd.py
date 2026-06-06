@@ -512,7 +512,7 @@ def test_setup_prints_ollama_binding_already_configured_message(mocker, tmp_path
 
     result = CliRunner().invoke(cli, ["setup"], input="y\n")
 
-    assert "OLLAMA_HOST=0.0.0.0" in result.output
+    assert "OLLAMA_HOST=0.0.0.0:11434" in result.output
 
 
 # ---------------------------------------------------------------------------
