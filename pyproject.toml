@@ -21,6 +21,7 @@ dev = [
     "pytest-cov",
     "ruff",
     "pyright",
+    "types-beautifulsoup4",
     "pre-commit",
 ]
 
@@ -56,6 +57,6 @@ convention = "numpy"
 [tool.pyright]
 pythonVersion = "3.11"
 typeCheckingMode = "standard"
-include = ["loki"]
+include = ["loki", "tools"]
 venvPath = "."
 venv = ".venv"
