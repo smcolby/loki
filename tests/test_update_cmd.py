@@ -19,7 +19,7 @@ def _completed(returncode: int = 0, stdout: str = "") -> MagicMock:
 
 
 def test_update_upgrades_installed_packages(mocker):
-    """update calls upgrade_packages for system packages that are installed."""
+    """Update calls upgrade_packages for system packages that are installed."""
     mock_upgrade = mocker.patch("loki.cli.upgrade_packages", return_value=True)
     mocker.patch("loki.cli.install_ollama", return_value=True)
     mocker.patch(
@@ -34,7 +34,7 @@ def test_update_upgrades_installed_packages(mocker):
 
 
 def test_update_warns_on_package_upgrade_failure(mocker):
-    """update prints a warning when upgrade_packages returns False."""
+    """Update prints a warning when upgrade_packages returns False."""
     mocker.patch("loki.cli.upgrade_packages", return_value=False)
     mocker.patch("loki.cli.install_ollama", return_value=True)
     mocker.patch(
@@ -48,7 +48,7 @@ def test_update_warns_on_package_upgrade_failure(mocker):
 
 
 def test_update_warns_when_no_package_manager(mocker):
-    """update prints a warning and continues when no package manager is found."""
+    """Update prints a warning and continues when no package manager is found."""
     mocker.patch("loki.cli.detect_package_manager", return_value=None)
     mocker.patch("loki.cli.install_ollama", return_value=True)
     mocker.patch(
@@ -62,7 +62,7 @@ def test_update_warns_when_no_package_manager(mocker):
 
 
 def test_update_skips_upgrade_when_no_packages_installed(mocker):
-    """update skips upgrade_packages when no loki packages are installed."""
+    """Update skips upgrade_packages when no loki packages are installed."""
     mocker.patch("loki.cli.is_installed", return_value=False)
     mock_upgrade = mocker.patch("loki.cli.upgrade_packages")
     mocker.patch("loki.cli.install_ollama", return_value=True)
@@ -81,7 +81,7 @@ def test_update_skips_upgrade_when_no_packages_installed(mocker):
 
 
 def test_update_upgrades_ollama_when_installed(mocker):
-    """update re-runs the Ollama install script when Ollama is on PATH."""
+    """Update re-runs the Ollama install script when Ollama is on PATH."""
     mocker.patch("loki.cli.upgrade_packages", return_value=True)
     mock_install = mocker.patch("loki.cli.install_ollama", return_value=True)
     mocker.patch(
@@ -96,7 +96,7 @@ def test_update_upgrades_ollama_when_installed(mocker):
 
 
 def test_update_warns_on_ollama_upgrade_failure(mocker):
-    """update prints a warning when the Ollama install script fails."""
+    """Update prints a warning when the Ollama install script fails."""
     mocker.patch("loki.cli.upgrade_packages", return_value=True)
     mocker.patch("loki.cli.install_ollama", return_value=False)
     mocker.patch(
@@ -110,7 +110,7 @@ def test_update_warns_on_ollama_upgrade_failure(mocker):
 
 
 def test_update_skips_ollama_when_not_installed(mocker):
-    """update skips the Ollama upgrade and prints a message when Ollama is absent."""
+    """Update skips the Ollama upgrade and prints a message when Ollama is absent."""
     mocker.patch("loki.cli.is_installed", side_effect=lambda cmd: cmd != "ollama")
     mocker.patch("loki.cli.upgrade_packages", return_value=True)
     mock_install = mocker.patch("loki.cli.install_ollama")
@@ -129,7 +129,7 @@ def test_update_skips_ollama_when_not_installed(mocker):
 
 
 def test_update_pulls_docker_images(mocker):
-    """update runs docker compose pull."""
+    """Update runs docker compose pull."""
     mocker.patch("loki.cli.upgrade_packages", return_value=True)
     mocker.patch("loki.cli.install_ollama", return_value=True)
     mock_run = mocker.patch(
@@ -144,7 +144,7 @@ def test_update_pulls_docker_images(mocker):
 
 
 def test_update_warns_and_returns_early_on_pull_failure(mocker):
-    """update prints a warning and stops when docker compose pull fails."""
+    """Update prints a warning and stops when docker compose pull fails."""
     mocker.patch("loki.cli.upgrade_packages", return_value=True)
     mocker.patch("loki.cli.install_ollama", return_value=True)
     mock_run = mocker.patch(
@@ -160,15 +160,15 @@ def test_update_warns_and_returns_early_on_pull_failure(mocker):
 
 
 def test_update_restarts_stack_when_running(mocker):
-    """update runs docker compose up -d when the stack is already running."""
+    """Update runs docker compose up -d when the stack is already running."""
     mocker.patch("loki.cli.upgrade_packages", return_value=True)
     mocker.patch("loki.cli.install_ollama", return_value=True)
     mock_run = mocker.patch(
         "loki.cli.subprocess.run",
         side_effect=[
-            _completed(),               # pull
-            _completed(stdout="abc\n"), # ps -q → stack running
-            _completed(),               # up -d
+            _completed(),  # pull
+            _completed(stdout="abc\n"),  # ps -q → stack running
+            _completed(),  # up -d
         ],
     )
 
@@ -180,14 +180,14 @@ def test_update_restarts_stack_when_running(mocker):
 
 
 def test_update_skips_restart_when_stack_not_running(mocker):
-    """update does not run docker compose up when the stack is stopped."""
+    """Update does not run docker compose up when the stack is stopped."""
     mocker.patch("loki.cli.upgrade_packages", return_value=True)
     mocker.patch("loki.cli.install_ollama", return_value=True)
     mock_run = mocker.patch(
         "loki.cli.subprocess.run",
         side_effect=[
-            _completed(),            # pull
-            _completed(stdout=""),   # ps -q → stack not running
+            _completed(),  # pull
+            _completed(stdout=""),  # ps -q → stack not running
         ],
     )
 
@@ -199,10 +199,13 @@ def test_update_skips_restart_when_stack_not_running(mocker):
 
 
 def test_update_exits_when_docker_not_found(mocker):
-    """update exits with an error message when docker is not on PATH."""
+    """Update exits with an error message when docker is not on PATH."""
     mocker.patch("loki.cli.upgrade_packages", return_value=True)
     mocker.patch("loki.cli.install_ollama", return_value=True)
-    mocker.patch("loki.cli.shutil.which", side_effect=lambda cmd: None if cmd == "docker" else "/usr/bin/stub")
+    mocker.patch(
+        "loki.cli.shutil.which",
+        side_effect=lambda cmd: None if cmd == "docker" else "/usr/bin/stub",
+    )
 
     result = CliRunner().invoke(cli, ["update"])
 
