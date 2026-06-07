@@ -22,6 +22,7 @@ from loki.system import (
     loki_root_already_exported,
     start_avahi_publish,
     stop_avahi_publish,
+    upgrade_packages,
 )
 
 # ---------------------------------------------------------------------------
@@ -482,3 +483,80 @@ def test_stop_avahi_publish_handles_stale_pid(mocker, tmp_path):
 
     stop_avahi_publish(pid_file)  # Should not raise.
     assert not pid_file.exists()
+
+
+def test_stop_avahi_publish_handles_unlink_oserror(mocker, tmp_path):
+    """stop_avahi_publish does not raise when pid_file.unlink raises OSError."""
+    pid_file = tmp_path / ".avahi.pid"
+    pid_file.write_text("9999")
+    mocker.patch("loki.system.os.kill")
+    mocker.patch.object(type(pid_file), "unlink", side_effect=OSError)
+
+    stop_avahi_publish(pid_file)  # Should not raise.
+
+
+# ---------------------------------------------------------------------------
+# upgrade_packages
+# ---------------------------------------------------------------------------
+
+
+def test_upgrade_packages_apt_get_uses_only_upgrade_flag(mocker):
+    """upgrade_packages invokes apt-get install --only-upgrade for apt-get."""
+    mock_run = mocker.patch(
+        "loki.system.subprocess.run",
+        autospec=True,
+        return_value=MagicMock(spec=subprocess.CompletedProcess, returncode=0),
+    )
+    upgrade_packages(["aria2", "avahi-utils"], "apt-get")
+    args = mock_run.call_args[0][0]
+    assert args[:4] == ["sudo", "apt-get", "install", "--only-upgrade"]
+
+
+def test_upgrade_packages_dnf_uses_upgrade_subcommand(mocker):
+    """upgrade_packages invokes dnf upgrade for dnf."""
+    mock_run = mocker.patch(
+        "loki.system.subprocess.run",
+        autospec=True,
+        return_value=MagicMock(spec=subprocess.CompletedProcess, returncode=0),
+    )
+    upgrade_packages(["aria2"], "dnf")
+    args = mock_run.call_args[0][0]
+    assert args[:3] == ["sudo", "dnf", "upgrade"]
+
+
+def test_upgrade_packages_returns_true_on_success(mocker):
+    """upgrade_packages returns True when the subprocess exits with code 0."""
+    mocker.patch(
+        "loki.system.subprocess.run",
+        autospec=True,
+        return_value=MagicMock(spec=subprocess.CompletedProcess, returncode=0),
+    )
+    assert upgrade_packages(["aria2"], "apt-get") is True
+
+
+def test_upgrade_packages_returns_false_on_failure(mocker):
+    """upgrade_packages returns False when the subprocess exits with a non-zero code."""
+    mocker.patch(
+        "loki.system.subprocess.run",
+        autospec=True,
+        return_value=MagicMock(spec=subprocess.CompletedProcess, returncode=1),
+    )
+    assert upgrade_packages(["aria2"], "apt-get") is False
+
+
+# ---------------------------------------------------------------------------
+# configure_ollama_binding — tee failure
+# ---------------------------------------------------------------------------
+
+
+def test_configure_ollama_binding_returns_false_on_tee_failure(mocker):
+    """configure_ollama_binding returns False when the tee step fails."""
+    mocker.patch(
+        "loki.system.subprocess.run",
+        autospec=True,
+        side_effect=[
+            MagicMock(spec=subprocess.CompletedProcess, returncode=0),  # mkdir
+            MagicMock(spec=subprocess.CompletedProcess, returncode=1),  # tee
+        ],
+    )
+    assert configure_ollama_binding() is False
