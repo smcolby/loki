@@ -56,5 +56,6 @@ convention = "numpy"
 [tool.pyright]
 pythonVersion = "3.11"
 typeCheckingMode = "standard"
+include = ["loki"]
 venvPath = "."
 venv = ".venv"
