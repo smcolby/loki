@@ -241,7 +241,7 @@ def setup() -> None:
         else:
             click.echo("Skipping — see README for manual instructions.")
     else:
-        click.echo("Ollama binding already configured (OLLAMA_HOST=0.0.0.0).")
+        click.echo("Ollama binding already configured (OLLAMA_HOST=0.0.0.0:11434).")
 
     # Add LOKI_ROOT to shell profile
     current_root = loki_root()
@@ -333,7 +333,7 @@ def start() -> None:
             click.echo(
                 f"Warning: Ollama is running but not reachable at http://{local_ip}:{config.ports.ollama}.\n"
                 "It is likely bound to 127.0.0.1 only — Docker containers will not be able to reach it.\n"
-                "Run `loki setup` to configure the OLLAMA_HOST=0.0.0.0 systemd override, then:\n"
+                "Run `loki setup` to configure the OLLAMA_HOST=0.0.0.0:11434 systemd override, then:\n"
                 "  sudo systemctl restart ollama",
                 err=True,
             )
@@ -417,7 +417,7 @@ def status() -> None:
             if ollama_online:
                 click.echo(
                     "    Ollama is bound to 127.0.0.1 only — Docker containers cannot reach it.\n"
-                    "    Run `loki setup` to configure OLLAMA_HOST=0.0.0.0, then:\n"
+                    "    Run `loki setup` to configure OLLAMA_HOST=0.0.0.0:11434, then:\n"
                     "      sudo systemctl restart ollama"
                 )
     else:
