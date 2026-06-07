@@ -77,6 +77,7 @@ Each step prompts `[Y/n]`. Skipped steps must be completed manually before the s
 loki start    Pull Ollama models, start the Docker Compose stack, and broadcast hostname via mDNS.
 loki stop     Stop the Docker Compose stack and terminate the mDNS broadcast.
 loki status   Check the health of running services.
+loki update   Upgrade system packages, Ollama, and Docker Compose images.
 loki cleanup  Remove ZIM files and Ollama models no longer listed in config.
 ```
 
@@ -131,7 +132,7 @@ If you skipped step 5 during setup, configure it manually:
 sudo mkdir -p /etc/systemd/system/ollama.service.d
 sudo tee /etc/systemd/system/ollama.service.d/override.conf <<'EOF'
 [Service]
-Environment="OLLAMA_HOST=0.0.0.0"
+Environment="OLLAMA_HOST=0.0.0.0:11434"
 EOF
 sudo systemctl daemon-reload
 sudo systemctl restart ollama
@@ -142,6 +143,17 @@ sudo systemctl restart ollama
 ## Development
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -e ".[dev]"
+pre-commit install
 pytest
+```
+
+Linting mirrors CI exactly — run the same checks locally with:
+
+```bash
+ruff format --check .
+ruff check .
+pyright
 ```

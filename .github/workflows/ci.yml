@@ -28,7 +28,7 @@ jobs:
         run: ruff check .
 
       - name: Type check
-        run: mypy loki
+        run: pyright
 
   test:
     runs-on: ubuntu-latest

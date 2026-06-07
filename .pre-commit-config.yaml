@@ -4,13 +4,12 @@ repos:
     hooks:
       - id: ruff-format
       - id: ruff
-        args: [--fix]
 
   - repo: local
     hooks:
-      - id: mypy
-        name: mypy
-        entry: mypy loki
+      - id: pyright
+        name: pyright
+        entry: pyright
         language: system
         pass_filenames: false
         types: [python]

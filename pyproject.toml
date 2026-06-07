@@ -20,9 +20,7 @@ dev = [
     "pytest-mock",
     "pytest-cov",
     "ruff",
-    "mypy",
-    "types-PyYAML",
-    "types-requests",
+    "pyright",
     "pre-commit",
 ]
 
@@ -55,11 +53,8 @@ convention = "numpy"
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "D100", "D101", "D102", "D103", "D104"]
 
-[tool.mypy]
-python_version = "3.11"
-disallow_untyped_defs = true
-check_untyped_defs = true
-warn_return_any = true
-warn_unused_ignores = true
-warn_unused_configs = true
-no_implicit_reexport = true
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
