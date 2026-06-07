@@ -9,7 +9,7 @@ description = "Local Offline Knowledge Index — CLI for managing the loki serve
 requires-python = ">=3.11"
 dependencies = [
     "click",
-    "pydantic>=2.0",
+    "pydantic>=2.13.0",
     "requests",
     "pyyaml",
 ]
