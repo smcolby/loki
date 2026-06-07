@@ -75,6 +75,30 @@ def install_packages(pkgs: list[str], manager: str) -> bool:
     return result.returncode == 0
 
 
+def upgrade_packages(pkgs: list[str], manager: str) -> bool:
+    """Upgrade ``pkgs`` using ``manager`` under sudo.
+
+    Parameters
+    ----------
+    pkgs : list of str
+        Package names to upgrade (e.g. ``["aria2", "avahi-utils"]``).
+    manager : str
+        The package manager to use (e.g. ``"apt-get"`` or ``"dnf"``).
+
+    Returns
+    -------
+    bool
+        ``True`` if the upgrade command exited with code 0, ``False`` otherwise.
+    """
+    if manager == "apt-get":
+        result = subprocess.run(
+            ["sudo", "apt-get", "install", "--only-upgrade", "-y"] + pkgs, check=False
+        )
+    else:
+        result = subprocess.run(["sudo", manager, "upgrade", "-y"] + pkgs, check=False)
+    return result.returncode == 0
+
+
 def install_docker() -> bool:
     """Install Docker via the official convenience script.
 

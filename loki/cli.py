@@ -33,6 +33,7 @@ from loki.system import (
     loki_root_already_exported,
     start_avahi_publish,
     stop_avahi_publish,
+    upgrade_packages,
 )
 
 
@@ -312,6 +313,71 @@ def setup() -> None:
 
 
 @cli.command()
+def update() -> None:
+    """Update system packages, Ollama, and Docker Compose images.
+
+    Upgrades aria2, avahi-daemon, and avahi-utils via the system package manager,
+    re-runs the official Ollama install script (which upgrades in place), and pulls
+    the latest Docker images before restarting the Compose stack if it is running.
+    """
+    # System packages
+    manager = detect_package_manager()
+    if manager:
+        pkg_map = PACKAGE_MAP[manager]
+        installed_pkgs = [pkg_map[cmd] for cmd in pkg_map if is_installed(cmd)]
+        if installed_pkgs:
+            click.echo(f"Upgrading system packages: {', '.join(installed_pkgs)}")
+            if not upgrade_packages(installed_pkgs, manager):
+                click.echo("Warning: system package upgrade failed.", err=True)
+            else:
+                click.echo("System packages upgraded.")
+        else:
+            click.echo("No loki system packages found to upgrade.")
+    else:
+        click.echo(
+            "Warning: no supported package manager found; skipping system package upgrade.",
+            err=True,
+        )
+
+    # Ollama
+    if is_installed("ollama"):
+        click.echo("\nUpgrading Ollama ...")
+        if install_ollama():
+            click.echo("Ollama upgraded.")
+        else:
+            click.echo("Warning: Ollama upgrade failed.", err=True)
+    else:
+        click.echo("\nOllama is not installed; skipping. Run `loki setup` to install.")
+
+    # Docker images
+    _require_tool("docker")
+    click.echo("\nPulling latest Docker images ...")
+    pull = subprocess.run(
+        ["docker", "compose", "--project-directory", str(loki_root()), "pull"],
+        check=False,
+    )
+    if pull.returncode != 0:
+        click.echo("Warning: docker compose pull failed.", err=True)
+        return
+
+    # Restart the stack only if it is already running
+    result = subprocess.run(
+        ["docker", "compose", "--project-directory", str(loki_root()), "ps", "-q"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.stdout.strip():
+        click.echo("Restarting Docker Compose stack with updated images ...")
+        subprocess.run(
+            ["docker", "compose", "--project-directory", str(loki_root()), "up", "-d"],
+            check=False,
+        )
+    else:
+        click.echo("Docker images pulled. Start the stack with `loki start` when ready.")
+
+
+@cli.command()
 def start() -> None:
     """Pull Ollama models, start the Docker Compose stack, and broadcast mDNS."""
     _require_tool("ollama")
@@ -331,9 +397,10 @@ def start() -> None:
         local_ip = get_local_ip()
         if local_ip and not _ollama_network_reachable(config.ports.ollama, local_ip):
             click.echo(
-                f"Warning: Ollama is running but not reachable at http://{local_ip}:{config.ports.ollama}.\n"
-                "It is likely bound to 127.0.0.1 only — Docker containers will not be able to reach it.\n"
-                "Run `loki setup` to configure the OLLAMA_HOST=0.0.0.0:11434 systemd override, then:\n"
+                f"Warning: Ollama is running but not reachable at "
+                f"http://{local_ip}:{config.ports.ollama}.\n"
+                "It is likely bound to 127.0.0.1 only — Docker containers cannot reach it.\n"
+                "Run `loki setup` to configure OLLAMA_HOST=0.0.0.0:11434, then:\n"
                 "  sudo systemctl restart ollama",
                 err=True,
             )
