@@ -19,6 +19,8 @@ dev = [
     "pytest",
     "pytest-mock",
     "pytest-cov",
+    "pytest-aiohttp",
+    "aiohttp==3.14.3",  # matches gateway/requirements.txt
     "ruff",
     "pyright",
     "types-beautifulsoup4",
@@ -56,11 +58,12 @@ convention = "numpy"
 
 [tool.pytest.ini_options]
 # Container entry scripts are standalone modules, not part of the loki package
-pythonpath = ["strata"]
+pythonpath = ["gateway", "strata"]
+asyncio_mode = "auto"
 
 [tool.pyright]
 pythonVersion = "3.11"
 typeCheckingMode = "standard"
-include = ["loki", "tools", "strata"]
+include = ["loki", "tools", "gateway", "strata"]
 venvPath = "."
 venv = ".venv"
