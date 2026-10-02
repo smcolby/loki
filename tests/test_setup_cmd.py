@@ -1,5 +1,5 @@
-"""Tests for the setup subcommand — system setup prompts, Caddyfile generation, and ZIM
-downloads.
+"""Tests for the setup subcommand: system setup prompts, generated files, image builds, and
+ZIM downloads.
 """
 
 import os
@@ -20,7 +20,7 @@ def test_setup_writes_caddyfile(mocker, sample_config, tmp_path):
     mocker.patch("loki.cli.env_file_path", return_value=tmp_path / ".env")
     mocker.patch("loki.cli.subprocess.run", autospec=True)
 
-    CliRunner().invoke(cli, ["setup"], input="y\n")
+    CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
     content = (tmp_path / "Caddyfile").read_text()
     assert "http://loki.local" in content
@@ -35,29 +35,29 @@ def test_setup_writes_env_file(mocker, sample_config, tmp_path):
     mocker.patch("loki.cli.env_file_path", return_value=tmp_path / ".env")
     mocker.patch("loki.cli.subprocess.run", autospec=True)
 
-    CliRunner().invoke(cli, ["setup"], input="y\n")
+    CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
     content = (tmp_path / ".env").read_text()
     assert "CADDY_PORT=80" in content
     assert "KIWIX_PORT=8080" in content
-    assert "OLLAMA_PORT=11434" in content
+    assert "API_PORT=8090" in content
 
 
 def test_setup_env_file_uses_custom_ports(mocker, tmp_path):
     """The setup command writes custom port values to the .env file."""
-    config = LokiConfig(ports=PortsConfig(caddy=8000, kiwix=9090, ollama=12000))
+    config = LokiConfig(ports=PortsConfig(caddy=8000, kiwix=9090, api=9000))
     mocker.patch("loki.cli.load_config", return_value=config)
     mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path)
     mocker.patch("loki.cli.caddyfile_path", return_value=tmp_path / "Caddyfile")
     mocker.patch("loki.cli.env_file_path", return_value=tmp_path / ".env")
     mocker.patch("loki.cli.subprocess.run", autospec=True)
 
-    CliRunner().invoke(cli, ["setup"], input="y\n")
+    CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
     content = (tmp_path / ".env").read_text()
     assert "CADDY_PORT=8000" in content
     assert "KIWIX_PORT=9090" in content
-    assert "OLLAMA_PORT=12000" in content
+    assert "API_PORT=9000" in content
 
 
 def test_setup_uses_default_caddy_url_when_missing(mocker, tmp_path):
@@ -69,7 +69,7 @@ def test_setup_uses_default_caddy_url_when_missing(mocker, tmp_path):
     mocker.patch("loki.cli.env_file_path", return_value=tmp_path / ".env")
     mocker.patch("loki.cli.subprocess.run", autospec=True)
 
-    CliRunner().invoke(cli, ["setup"], input="y\n")
+    CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
     assert LokiConfig().url in caddy_out.read_text()
 
@@ -82,7 +82,7 @@ def test_setup_prints_caddyfile_confirmation(mocker, sample_config, tmp_path):
     mocker.patch("loki.cli.env_file_path", return_value=tmp_path / ".env")
     mocker.patch("loki.cli.subprocess.run", autospec=True)
 
-    result = CliRunner().invoke(cli, ["setup"], input="y\n")
+    result = CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
     assert "Caddyfile written" in result.output
     assert "loki.local" in result.output
@@ -96,11 +96,11 @@ def test_setup_prints_port_confirmation(mocker, sample_config, tmp_path):
     mocker.patch("loki.cli.env_file_path", return_value=tmp_path / ".env")
     mocker.patch("loki.cli.subprocess.run", autospec=True)
 
-    result = CliRunner().invoke(cli, ["setup"], input="y\n")
+    result = CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
     assert "caddy=80" in result.output
     assert "kiwix=8080" in result.output
-    assert "ollama=11434" in result.output
+    assert "api=8090" in result.output
 
 
 def test_aria2c_threads_is_half_cpu_count(mocker):
@@ -130,7 +130,7 @@ def test_setup_calls_aria2c_for_missing_file(mocker, sample_config, tmp_path):
     mocker.patch("loki.cli.os.cpu_count", return_value=8)
     mock_run = mocker.patch("loki.cli.subprocess.run", autospec=True)
 
-    CliRunner().invoke(cli, ["setup"], input="y\n")
+    CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
     expected_url = sample_config.kiwix_files[0].url
     mock_run.assert_called_once_with(
@@ -150,7 +150,7 @@ def test_setup_skips_existing_file(mocker, sample_config, tmp_path):
     filename = Path(sample_config.kiwix_files[0].url).name
     (tmp_path / filename).touch()
 
-    CliRunner().invoke(cli, ["setup"], input="y\n")
+    CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
     mock_run.assert_not_called()
 
@@ -166,7 +166,7 @@ def test_setup_prints_skip_message(mocker, sample_config, tmp_path):
     filename = Path(sample_config.kiwix_files[0].url).name
     (tmp_path / filename).touch()
 
-    result = CliRunner().invoke(cli, ["setup"], input="y\n")
+    result = CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
     assert "Skipping" in result.output
     assert filename in result.output
@@ -182,7 +182,7 @@ def test_setup_empty_kiwix_files(mocker, tmp_path):
     mocker.patch("loki.cli.env_file_path", return_value=tmp_path / ".env")
     mock_run = mocker.patch("loki.cli.subprocess.run", autospec=True)
 
-    result = CliRunner().invoke(cli, ["setup"], input="y\n")
+    result = CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
     mock_run.assert_not_called()
     assert "No kiwix_files" in result.output
@@ -198,7 +198,7 @@ def test_setup_prints_failure_on_nonzero_exit(mocker, sample_config, tmp_path):
     mock_result.returncode = 1
     mocker.patch("loki.cli.subprocess.run", autospec=True, return_value=mock_result)
 
-    result = CliRunner().invoke(cli, ["setup"], input="y\n")
+    result = CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
     assert "failed" in result.output.lower()
 
@@ -212,7 +212,7 @@ def test_setup_copies_default_config_when_missing(mocker, tmp_path):
     mocker.patch("loki.cli.env_file_path", return_value=tmp_path / ".env")
     mock_copy = mocker.patch("loki.cli.shutil.copy")
 
-    result = CliRunner().invoke(cli, ["setup"], input="y\n")
+    result = CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
     mock_copy.assert_called_once()
     assert "Created" in result.output
@@ -228,7 +228,7 @@ def test_setup_does_not_overwrite_existing_config(mocker, tmp_path):
     (tmp_path / "config.yaml").write_text("url: custom.local\n")
     mock_copy = mocker.patch("loki.cli.shutil.copy")
 
-    CliRunner().invoke(cli, ["setup"], input="y\n")
+    CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
     mock_copy.assert_not_called()
     assert (tmp_path / "config.yaml").read_text() == "url: custom.local\n"
@@ -248,7 +248,7 @@ def test_setup_config_review_decline_exits(mocker, tmp_path):
     mocker.patch("loki.cli.env_file_path", return_value=tmp_path / ".env")
     mocker.patch("click.confirm", return_value=False)
 
-    result = CliRunner().invoke(cli, ["setup"], input="y\n")
+    result = CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
     assert not (tmp_path / "Caddyfile").exists()
     assert result.exit_code != 0
@@ -263,7 +263,7 @@ def test_setup_config_review_decline_shows_path(mocker, tmp_path):
     mocker.patch("loki.cli.env_file_path", return_value=tmp_path / ".env")
     mocker.patch("click.confirm", return_value=False)
 
-    result = CliRunner().invoke(cli, ["setup"], input="y\n")
+    result = CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
     assert str(tmp_path / "config.yaml") in result.output
 
@@ -278,7 +278,7 @@ def test_setup_config_review_displays_config_contents(mocker, tmp_path):
     config_file = tmp_path / "config.yaml"
     config_file.write_text("url: loki.local\n")
 
-    result = CliRunner().invoke(cli, ["setup"], input="y\n")
+    result = CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
     assert "url: loki.local" in result.output
 
@@ -297,11 +297,10 @@ def test_setup_prompts_to_install_missing_packages(mocker, tmp_path):
     mocker.patch("loki.cli.env_file_path", return_value=tmp_path / ".env")
     mocker.patch("loki.cli.is_installed", return_value=False)
     mocker.patch("loki.cli.install_docker", return_value=True)
-    mocker.patch("loki.cli.install_ollama", return_value=True)
     mocker.patch("click.confirm", return_value=True)
     mock_install = mocker.patch("loki.cli.install_packages", return_value=True)
 
-    CliRunner().invoke(cli, ["setup"], input="y\n")
+    CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
     mock_install.assert_called_once()
 
@@ -316,7 +315,7 @@ def test_setup_skips_package_prompt_when_all_installed(mocker, tmp_path):
     # is_installed is True via conftest autouse — no prompt expected.
     mock_install = mocker.patch("loki.cli.install_packages")
 
-    CliRunner().invoke(cli, ["setup"], input="y\n")
+    CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
     mock_install.assert_not_called()
 
@@ -330,7 +329,7 @@ def test_setup_prints_packages_already_installed_message(mocker, tmp_path):
     mocker.patch("loki.cli.env_file_path", return_value=tmp_path / ".env")
     # is_installed is True via conftest autouse.
 
-    result = CliRunner().invoke(cli, ["setup"], input="y\n")
+    result = CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
     assert "already installed" in result.output
 
@@ -345,7 +344,7 @@ def test_setup_package_install_decline_prints_readme_notice(mocker, tmp_path):
     mocker.patch("loki.cli.is_installed", return_value=False)
     mocker.patch("click.confirm", side_effect=[True, False])  # confirm config; decline pkgs
 
-    result = CliRunner().invoke(cli, ["setup"], input="y\n")
+    result = CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
     assert "README" in result.output
 
@@ -360,7 +359,7 @@ def test_setup_warns_when_no_package_manager_found(mocker, tmp_path):
     mocker.patch("loki.cli.is_installed", return_value=False)
     mocker.patch("loki.cli.detect_package_manager", return_value=None)
 
-    result = CliRunner().invoke(cli, ["setup"], input="y\n")
+    result = CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
     assert "no supported package manager" in result.output.lower()
 
@@ -381,7 +380,7 @@ def test_setup_prompts_to_install_docker_when_missing(mocker, tmp_path):
     mocker.patch("click.confirm", return_value=True)
     mock_install = mocker.patch("loki.cli.install_docker", return_value=True)
 
-    CliRunner().invoke(cli, ["setup"], input="y\n")
+    CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
     mock_install.assert_called_once()
 
@@ -397,7 +396,7 @@ def test_setup_prints_docker_group_notice_after_install(mocker, tmp_path):
     mocker.patch("click.confirm", return_value=True)
     mocker.patch("loki.cli.install_docker", return_value=True)
 
-    result = CliRunner().invoke(cli, ["setup"], input="y\n")
+    result = CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
     assert "log out" in result.output.lower() or "newgrp" in result.output
 
@@ -411,108 +410,135 @@ def test_setup_prints_docker_already_installed_message(mocker, tmp_path):
     mocker.patch("loki.cli.env_file_path", return_value=tmp_path / ".env")
     # is_installed is True via conftest autouse.
 
-    result = CliRunner().invoke(cli, ["setup"], input="y\n")
+    result = CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
     assert "Docker already installed" in result.output
 
 
 # ---------------------------------------------------------------------------
-# Ollama (Step 3)
+# AMD GPU check
 # ---------------------------------------------------------------------------
 
 
-def test_setup_prompts_to_install_ollama_when_missing(mocker, tmp_path):
-    """The setup command prompts to install Ollama when it is not on PATH."""
+def test_setup_confirms_gpu_devices(mocker, tmp_path):
+    """The setup command reports the AMD GPU device nodes when they exist."""
     mocker.patch("loki.cli.load_config", return_value=LokiConfig())
     mocker.patch("loki.cli.loki_root", return_value=tmp_path)
     mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path)
-    mocker.patch("loki.cli.caddyfile_path", return_value=tmp_path / "Caddyfile")
-    mocker.patch("loki.cli.env_file_path", return_value=tmp_path / ".env")
-    mocker.patch("loki.cli.is_installed", side_effect=lambda cmd: cmd != "ollama")
-    mocker.patch("click.confirm", return_value=True)
-    mock_install = mocker.patch("loki.cli.install_ollama", return_value=True)
 
-    CliRunner().invoke(cli, ["setup"], input="y\n")
+    result = CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
-    mock_install.assert_called_once()
+    assert "AMD GPU devices found" in result.output
 
 
-def test_setup_skips_ollama_prompt_when_installed(mocker, tmp_path):
-    """The setup command does not prompt to install Ollama when it is already on PATH."""
+def test_setup_warns_without_gpu_devices(mocker, tmp_path):
+    """The setup command warns and continues when /dev/kfd or /dev/dri is missing."""
     mocker.patch("loki.cli.load_config", return_value=LokiConfig())
     mocker.patch("loki.cli.loki_root", return_value=tmp_path)
     mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path)
-    mocker.patch("loki.cli.caddyfile_path", return_value=tmp_path / "Caddyfile")
-    mocker.patch("loki.cli.env_file_path", return_value=tmp_path / ".env")
-    mock_install = mocker.patch("loki.cli.install_ollama")
+    mocker.patch("loki.cli.amd_gpu_present", return_value=False)
 
-    CliRunner().invoke(cli, ["setup"], input="y\n")
+    result = CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
-    mock_install.assert_not_called()
+    assert "amdgpu kernel driver" in result.output
+    assert (tmp_path / "Caddyfile").exists()
 
 
-def test_setup_prints_ollama_already_installed_message(mocker, tmp_path):
-    """The setup command prints a confirmation when Ollama is already on PATH."""
-    mocker.patch("loki.cli.load_config", return_value=LokiConfig())
-    mocker.patch("loki.cli.loki_root", return_value=tmp_path)
+# ---------------------------------------------------------------------------
+# Generated files and local images
+# ---------------------------------------------------------------------------
+
+
+def test_setup_writes_models_preset(mocker, sample_config, tmp_path, write_preset):
+    """The setup command writes models.ini from the presets under models_dir."""
+    mocker.patch("loki.cli.load_config", return_value=sample_config)
     mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path)
-    mocker.patch("loki.cli.caddyfile_path", return_value=tmp_path / "Caddyfile")
-    mocker.patch("loki.cli.env_file_path", return_value=tmp_path / ".env")
-    # is_installed is True via conftest autouse.
+    write_preset(sample_config.llama.models_dir, "alpha")
+
+    CliRunner().invoke(cli, ["setup"], input="y\nn\n")
+
+    assert "[alpha]" in (tmp_path / "models.ini").read_text()
+
+
+def test_setup_builds_missing_images_on_confirm(mocker, sample_config, tmp_path, missing_services):
+    """Accepting the build prompt builds only the services whose image is missing."""
+    mocker.patch("loki.cli.load_config", return_value=sample_config)
+    mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path)
+    (tmp_path / Path(sample_config.kiwix_files[0].url).name).touch()
+    missing_services.return_value = ["llama"]
+    mock_run = mocker.patch(
+        "loki.cli.subprocess.run",
+        autospec=True,
+        return_value=subprocess.CompletedProcess(args=[], returncode=0),
+    )
+
+    result = CliRunner().invoke(cli, ["setup"], input="y\ny\n")
+
+    commands = [call.args[0] for call in mock_run.call_args_list]
+    assert [cmd[-2:] for cmd in commands if cmd[:2] == ["docker", "compose"]] == [
+        ["build", "llama"]
+    ]
+    assert "loki-llama:gfx1100-rocm7.2.4-abc123" in result.output
+    assert "Images built." in result.output
+
+
+def test_setup_warns_when_image_build_fails(mocker, sample_config, tmp_path, missing_services):
+    """A failed image build prints a warning instead of stopping setup."""
+    mocker.patch("loki.cli.load_config", return_value=sample_config)
+    mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path)
+    (tmp_path / Path(sample_config.kiwix_files[0].url).name).touch()
+    missing_services.return_value = ["gateway", "llama"]
+    mocker.patch(
+        "loki.cli.subprocess.run",
+        autospec=True,
+        return_value=subprocess.CompletedProcess(args=[], returncode=1),
+    )
+
+    result = CliRunner().invoke(cli, ["setup"], input="y\ny\n")
+
+    assert "image build failed" in result.output
+    assert "Skipping" in result.output
+
+
+def test_setup_skips_build_on_decline(mocker, sample_config, tmp_path, missing_services):
+    """Declining the build prompt leaves the build to loki start."""
+    mocker.patch("loki.cli.load_config", return_value=sample_config)
+    mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path)
+    (tmp_path / Path(sample_config.kiwix_files[0].url).name).touch()
+    missing_services.return_value = ["llama"]
+    mock_run = mocker.patch("loki.cli.subprocess.run", autospec=True)
+
+    result = CliRunner().invoke(cli, ["setup"], input="y\nn\n")
+
+    mock_run.assert_not_called()
+    assert "`loki start` builds missing images" in result.output
+
+
+def test_setup_reports_images_already_built(mocker, sample_config, tmp_path):
+    """With every image present, setup builds nothing and does not prompt."""
+    mocker.patch("loki.cli.load_config", return_value=sample_config)
+    mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path)
+    (tmp_path / Path(sample_config.kiwix_files[0].url).name).touch()
+    mock_run = mocker.patch("loki.cli.subprocess.run", autospec=True)
 
     result = CliRunner().invoke(cli, ["setup"], input="y\n")
 
-    assert "Ollama already installed" in result.output
+    mock_run.assert_not_called()
+    assert "Local images already built." in result.output
 
 
-# ---------------------------------------------------------------------------
-# Ollama binding (Step 4)
-# ---------------------------------------------------------------------------
-
-
-def test_setup_prompts_to_configure_ollama_binding_when_not_set(mocker, tmp_path):
-    """The setup command prompts to configure Ollama binding when not already set."""
+def test_setup_skips_build_prompt_without_docker(mocker, tmp_path, missing_services):
+    """The build prompt is not offered when Docker is still missing."""
     mocker.patch("loki.cli.load_config", return_value=LokiConfig())
     mocker.patch("loki.cli.loki_root", return_value=tmp_path)
     mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path)
-    mocker.patch("loki.cli.caddyfile_path", return_value=tmp_path / "Caddyfile")
-    mocker.patch("loki.cli.env_file_path", return_value=tmp_path / ".env")
-    mocker.patch("loki.cli.is_ollama_binding_configured", return_value=False)
-    mocker.patch("click.confirm", return_value=True)
-    mock_configure = mocker.patch("loki.cli.configure_ollama_binding", return_value=True)
+    mocker.patch("loki.cli.is_installed", side_effect=lambda cmd: cmd != "docker")
+    missing_services.return_value = ["llama"]
 
-    CliRunner().invoke(cli, ["setup"], input="y\n")
+    result = CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
-    mock_configure.assert_called_once()
-
-
-def test_setup_skips_ollama_binding_when_already_configured(mocker, tmp_path):
-    """The setup command skips the Ollama binding step when override is already in place."""
-    mocker.patch("loki.cli.load_config", return_value=LokiConfig())
-    mocker.patch("loki.cli.loki_root", return_value=tmp_path)
-    mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path)
-    mocker.patch("loki.cli.caddyfile_path", return_value=tmp_path / "Caddyfile")
-    mocker.patch("loki.cli.env_file_path", return_value=tmp_path / ".env")
-    # is_ollama_binding_configured is True via conftest autouse.
-    mock_configure = mocker.patch("loki.cli.configure_ollama_binding")
-
-    CliRunner().invoke(cli, ["setup"], input="y\n")
-
-    mock_configure.assert_not_called()
-
-
-def test_setup_prints_ollama_binding_already_configured_message(mocker, tmp_path):
-    """The setup command confirms the Ollama binding state when already configured."""
-    mocker.patch("loki.cli.load_config", return_value=LokiConfig())
-    mocker.patch("loki.cli.loki_root", return_value=tmp_path)
-    mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path)
-    mocker.patch("loki.cli.caddyfile_path", return_value=tmp_path / "Caddyfile")
-    mocker.patch("loki.cli.env_file_path", return_value=tmp_path / ".env")
-    # is_ollama_binding_configured is True via conftest autouse.
-
-    result = CliRunner().invoke(cli, ["setup"], input="y\n")
-
-    assert "OLLAMA_HOST=0.0.0.0:11434" in result.output
+    assert "Build missing images" not in result.output
+    missing_services.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -533,7 +559,7 @@ def test_setup_adds_loki_root_to_profile_when_not_exported(mocker, tmp_path):
     os.environ.pop("LOKI_ROOT", None)
     mock_add = mocker.patch("loki.cli.add_loki_root_to_profile", return_value=True)
 
-    CliRunner().invoke(cli, ["setup"], input="y\n")
+    CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
     mock_add.assert_called_once()
 
@@ -548,7 +574,7 @@ def test_setup_skips_loki_root_prompt_when_already_exported(mocker, tmp_path):
     # loki_root_already_exported is True via conftest autouse.
     mock_add = mocker.patch("loki.cli.add_loki_root_to_profile")
 
-    CliRunner().invoke(cli, ["setup"], input="y\n")
+    CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
     mock_add.assert_not_called()
 
@@ -566,7 +592,7 @@ def test_setup_loki_root_prints_source_instruction(mocker, tmp_path):
     os.environ.pop("LOKI_ROOT", None)
     mocker.patch("loki.cli.add_loki_root_to_profile", return_value=True)
 
-    result = CliRunner().invoke(cli, ["setup"], input="y\n")
+    result = CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
     assert "source" in result.output
 
@@ -584,7 +610,7 @@ def test_setup_prints_loki_root_in_profile_message(mocker, tmp_path):
     mocker.patch.dict(os.environ, {}, clear=False)
     os.environ.pop("LOKI_ROOT", None)
 
-    result = CliRunner().invoke(cli, ["setup"], input="y\n")
+    result = CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
     assert "already in" in result.output
 
@@ -598,6 +624,6 @@ def test_setup_prints_loki_root_env_set_message(mocker, tmp_path):
     mocker.patch("loki.cli.env_file_path", return_value=tmp_path / ".env")
     mocker.patch.dict(os.environ, {"LOKI_ROOT": str(tmp_path)})
 
-    result = CliRunner().invoke(cli, ["setup"], input="y\n")
+    result = CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
     assert "already set" in result.output

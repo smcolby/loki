@@ -2,21 +2,21 @@
 
 # `loki`: local offline knowledge index
 
-`loki` is a self-hosted AI stack that gives you a private, fully offline knowledge base powered by a local LLM. It combines [Ollama](https://ollama.com) (local inference), [Open WebUI](https://openwebui.com) (chat interface), and [Kiwix](https://kiwix.org) (offline Wikipedia and other knowledge archives) — all orchestrated with Docker Compose and managed through a single CLI.
+`loki` is a self-hosted AI stack that gives you a private, fully offline knowledge base powered by a local LLM. It combines [llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server` (local inference), [Open WebUI](https://openwebui.com) (chat interface), and [Kiwix](https://kiwix.org) (offline Wikipedia and other knowledge archives), all orchestrated with Docker Compose and managed through a single CLI. An optional second engine, [Strata](https://github.com/Niko1221/Strata), serves Qwen3.8-Flash-Next behind the same API, and an optional [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) engine generates images.
 
 Whether you're working air-gapped, want to keep queries off the cloud, or just want an always-available research assistant, `loki` runs entirely on your own hardware with no external dependencies at runtime.
 
 > **Linux only.** `loki` targets Linux systems with systemd. `loki setup` installs and configures all prerequisites automatically.
 
-> **Bring your own drivers.** We're going to leave GPU driver installation up to you as well (ideally _before_ installing `loki`).
+> **AMD GPUs only.** `llama-server` is built against ROCm for one AMD GPU architecture. Install the `amdgpu` kernel driver yourself, ideally _before_ installing `loki`; the container bundles the ROCm user-space libraries it needs.
 
 ## Prerequisites
 
-- A Linux system with systemd
+- A Linux system with systemd and an AMD GPU (`/dev/kfd` and `/dev/dri` present)
 - [`pipx`](https://pipx.pypa.io/stable/installation/)
 - `curl`
 
-Everything else — Docker, Ollama, aria2, avahi-daemon — is installed automatically by `loki setup`.
+`loki setup` installs everything else (Docker, aria2, avahi-daemon).
 
 ## Installation
 
@@ -38,17 +38,116 @@ url: loki.local              # Hostname used to reach the server on your local n
 ports:
   caddy: 80      # Caddy reverse proxy (Open WebUI).
   kiwix: 8080    # Kiwix offline knowledge server.
-  ollama: 11434  # Native Ollama service.
+  api: 8090      # Model API for every engine (OpenAI and Anthropic compatible).
+
+llama:
+  models_dir: ~/.llms                               # One subdirectory per model.
+  ref: 5d806aa2575e01e126651fd69ab1ab6cefff861d     # llama.cpp commit to build.
+  gpu_targets: gfx1100                              # AMD GPU architecture (rocminfo | grep gfx).
+  rocm_version: 7.2.4                               # ROCm toolchain and bundled runtime.
+  max_loaded: 1                                     # Models kept in VRAM at once.
+  defaults:                                         # Options every model gets.
+    n-gpu-layers: 99
+    flash-attn: "on"
+
+strata:
+  engines: {}                                       # Engine name -> config file (see below).
+  data_dir: ~/.llms/strata                          # Holds the engine configs and model files.
+  ref: 1678de333d0e0711bc414ad992b640e1a37dd814     # Strata commit to build.
+  gpu_targets: gfx1100
+  rocm_version: 7.10.0a20251120                     # TheRock ROCm wheels.
+
+image:
+  engines: {}                                       # Engine name -> model id and sd-server args.
+  models_dir: ~/.llms                               # Mounted read-only into every image engine.
+  ref: 3f8527a46c54ecf4cb4ed6003da8e8982283c73c     # stable-diffusion.cpp commit to build.
+  gpu_targets: gfx1100
+  rocm_version: 7.2.4
 
 kiwix_files:
   - name: wikipedia_en_all_nopic
     url: https://download.kiwix.org/zim/wikipedia/wikipedia_en_all_nopic_2025-12.zim
-
-ollama_models:
-  - qwen3.5:9b
 ```
 
-The defaults work out of the box. Edit `kiwix_files` (datasets [here](https://download.kiwix.org/zim/)) and `ollama_models` (models [here](https://ollama.com/search)) to match what you want downloaded. `loki setup` generates the `Caddyfile` and `.env` automatically — do not edit those files by hand.
+`loki/config.default.yaml` lists the full default `llama.defaults` block. Keys under `defaults` are `llama-server` long option names without the leading dashes. Quote `"on"` and `"off"` so YAML keeps them as strings.
+
+Edit `kiwix_files` (datasets [here](https://download.kiwix.org/zim/)) to match what you want downloaded. `loki` generates the `Caddyfile`, `.env`, `models.ini`, and `compose.engines.yaml`; do not edit those files by hand.
+
+## Adding models
+
+`loki` serves hand-curated GGUF files; it never downloads models. Each subdirectory of `llama.models_dir` that contains a `preset.ini` becomes one or more models. A section header names the model id clients request, and its options are `llama-server` long option names:
+
+```ini
+; ~/.llms/gemma4-31b-iq4xs/preset.ini
+[gemma4-31b-iq4xs]
+model = gemma-4-31B-it-IQ4_XS.gguf
+model-draft = mtp-gemma-4-31B-it-Q8_0.gguf
+spec-type = draft-mtp
+ctx-size = 163840
+temp = 1.0
+```
+
+Relative `model`, `model-draft`, `mmproj`, and `chat-template-file` paths resolve against the preset's directory, and each file must exist. A preset may declare several sections (for example the same GGUF at two context sizes), but a model id may appear only once across all presets. Global settings belong in `llama.defaults`, so a `[*]` section in a preset is an error.
+
+`loki start` assembles every preset into `models.ini` and lists the model ids it found. Restart the stack (`loki stop && loki start`) after adding or editing a preset.
+
+`llama-server` loads a model on its first request and unloads the least recently used one when more than `max_loaded` would be resident. With `fit: "off"`, a preset whose context does not fit in VRAM fails to load with an error instead of silently shrinking.
+
+### Adding Strata
+
+Strata streams a mixture-of-experts model's experts from host memory, so it runs Qwen3.8-Flash-Next and its fine-tunes on a GPU too small to hold them. Each entry under `strata.engines` maps an engine name to an engine config file in `strata.data_dir`:
+
+```yaml
+strata:
+  engines:
+    qwen: qwen.json
+    swift: swift.json
+```
+
+Each engine runs in its own container as Compose service `strata-<name>`, defined in the generated `compose.engines.yaml`. Engine names use lowercase letters, digits, `_`, and `-`. A config file looks like this:
+
+```json
+{
+  "args": ["--pack", "/home/you/.llms/strata/packs/iq2_xs", "--native", "/home/you/.llms/strata/models/model-00001-of-00002.gguf", "--max-context", "131072"],
+  "tokenizer": "/home/you/.llms/strata/packs/iq2_xs/tokenizer",
+  "model_name": "qwen3.8-flash-next-iq2_xs",
+  "env": {"STRATA_RESIDENT_PIN": "0"}
+}
+```
+
+`args` are Strata engine arguments, `model_name` is the model id clients request, and `env` (optional) sets engine environment variables. Use absolute paths inside `data_dir`, which is mounted read-only at the same path. The image supplies the engine binary, its libraries, and a hipBLASLt tuning table for `gpu_targets`, so an engine config must not set `exe`, `cwd`, `lib_dirs`, `backend`, or `log`. `loki start` stops with an error if a listed engine config is missing. All engines share one image, and an engine that is not loaded holds no GPU memory and little host RAM.
+
+Only one engine holds the GPU at a time. The first request for a model on the other engine waits for in-flight requests to finish, unloads the current engine's models, and then loads the requested one.
+
+### Adding image generation
+
+An image engine runs stable-diffusion.cpp's `sd-server` for one image model. Each entry under `image.engines` names the engine, the model id clients request, and the `sd-server` arguments:
+
+```yaml
+image:
+  engines:
+    qwen:
+      model: qwen-image-2.1-q8_0
+      args:
+        - --diffusion-model
+        - /home/you/.llms/qwen-image-2.1/qwen-image-2.1-Q8_0.gguf
+        - --llm
+        - /home/you/.llms/qwen-image-2.1/Qwen3-VL-8B-Instruct-UD-Q4_K_XL.gguf
+        - --vae
+        - /home/you/.llms/qwen-image-2.1/qwen_image_2.1_vae_bf16.safetensors
+        - --params-backend
+        - disk
+        - --width
+        - "2528"
+        - --height
+        - "1696"
+```
+
+`--width` and `--height` set the size of a request that names none; both must be multiples of 32. Each engine runs as Compose service `image-<name>` (container `loki-image-<name>`) in `compose.engines.yaml`, with `models_dir` mounted read-only at the same path, so use absolute paths inside it. Model ids use letters, digits, `.`, `_`, `:`, `/`, and `-`. All image engines share one image. sd-server keeps about 1.6 GiB of GPU memory after a generation, so a supervisor in the image starts it on the first request and stops it when another engine needs the GPU; the arguments must not set `--listen-ip` or `--listen-port`.
+
+Image models answer `POST /v1/images/generations` on the model API and stay out of `/v1/models`, which chat clients read as their model list. A chat request for an image model, or an image request for a chat model, fails with HTTP 400. An image request takes the GPU like any other engine swap: it waits for in-flight text requests, unloads the text engines, and then generates. The next chat request stops sd-server and reloads its model.
+
+To generate images from Open WebUI, open **Admin Panel > Settings > Images**, choose the OpenAI engine, set the base URL to `http://gateway:8080/v1`, enter any API key, set the model to the image model id, and set the image size (Open WebUI always sends one, so the engine's default applies only to other clients).
 
 ## Setup
 
@@ -63,25 +162,37 @@ This will:
 1. **Display `config.yaml`** and ask you to confirm before proceeding.
 2. **Install system packages** (aria2, avahi-daemon, avahi-utils) via `apt-get` or `dnf`.
 3. **Install Docker** via the official convenience script and add your user to the `docker` group.
-4. **Install Ollama** via the official install script.
-5. **Configure Ollama network binding** — creates a systemd override so Ollama listens on all interfaces (required for Docker containers to reach it via `host.docker.internal`).
-6. **Add `LOKI_ROOT` to your shell profile** so `loki` commands work from any directory.
-7. **Generate the `Caddyfile` and `.env`** from your configuration.
+4. **Check for AMD GPU devices** (`/dev/kfd` and `/dev/dri`) and warn if the `amdgpu` driver is missing.
+5. **Add `LOKI_ROOT` to your shell profile** so `loki` commands work from any directory.
+6. **Generate the `Caddyfile`, `.env`, and `models.ini`** from your configuration and model presets.
+7. **Build missing local images**: the API gateway, `llama-server` (10 to 20 minutes), and the Strata and image engines when any is configured.
 8. **Download ZIM files** listed in `kiwix_files` using aria2.
 
-Each step prompts `[Y/n]`. Skipped steps must be completed manually before the stack will function correctly.
+Steps that change your system prompt `[Y/n]`. Skipped steps must be completed manually before the stack will function correctly; `loki start` builds any image step 7 skipped.
 
 ## Usage
 
 ```
-loki start    Pull Ollama models, start the Docker Compose stack, and broadcast hostname via mDNS.
+loki start    Write generated files, start the Docker Compose stack, and broadcast hostname via mDNS.
 loki stop     Stop the Docker Compose stack and terminate the mDNS broadcast.
-loki status   Check the health of running services.
-loki update   Upgrade system packages, Ollama, and Docker Compose images.
-loki cleanup  Remove ZIM files and Ollama models no longer listed in config.
+loki status   Check the health of running services and list model load states.
+loki update   Upgrade system packages, pull Docker images, and build missing local images.
+loki cleanup  Remove ZIM files and local images no longer matching config.
 ```
 
 After `loki start`, Open WebUI is available at `http://loki.local` (or whichever `url` you configured).
+
+Local image tags name every build input: `loki-llama:<gpu_targets>-rocm<rocm_version>-<ref>`, `loki-strata:<gpu_targets>-rocm<rocm_version>-<ref>`, `loki-image:<gpu_targets>-rocm<rocm_version>-<ref>`, and `loki-gateway:<hash of the gateway sources>`. `loki update` builds only images whose tag is missing, so an unchanged config rebuilds nothing. To pick up a new llama.cpp release, set `llama.ref` to the new commit and run `loki update`. `loki cleanup` then offers to remove the image built for the previous commit.
+
+## Connecting other clients
+
+A gateway listens on the LAN at `http://loki.local:8090` without an API key and routes each request to the engine serving the requested model. It exposes:
+
+- An OpenAI-compatible API at `/v1` (`/v1/chat/completions`, `/v1/models`). `/v1/models` lists every engine's models, with the engine in `owned_by`. Clients that require a key accept any placeholder value.
+- An Anthropic-compatible `/v1/messages` endpoint, so Claude Code can use it by setting `ANTHROPIC_BASE_URL=http://loki.local:8090`.
+- `/health`, which reports each engine's state and which one holds the GPU.
+
+Request reasoning depth with the OpenAI `reasoning_effort` field. A chat template may reject effort levels its model does not support; the request then fails with an error rather than running at a different level.
 
 ## Connecting Kiwix to Open WebUI
 
@@ -101,7 +212,7 @@ By default, Open WebUI injects tool definitions into the system prompt, which is
 2. Under **Advanced Parameters**, set **Tool Calling** to **Native**.
 3. Save.
 
-> **Note:** Native tool calling requires a model fine-tuned for function calling (e.g. `qwen3`, `mistral-nemo`, `llama3.1`). If responses degrade after enabling it, the model may not support the feature — revert to the default setting.
+> **Note:** Native tool calling requires a model fine-tuned for function calling (e.g. `qwen3`, `gemma4`). If responses degrade after enabling it, the model may not support the feature; revert to the default setting.
 
 ---
 
@@ -111,32 +222,22 @@ By default, Open WebUI injects tool definitions into the system prompt, which is
 
 The default `url: loki.local` uses the `.local` TLD, which is broadcast via **mDNS** and resolves automatically on your LAN without any router configuration. `loki setup` installs `avahi-daemon` for this. When `loki start` runs, it spawns `avahi-publish-address` to announce the hostname for as long as the stack is running; `loki stop` terminates the announcement.
 
-If you prefer a non-`.local` hostname (e.g. `loki.home`), set it in `config.yaml` and add a static entry to `/etc/hosts` on each client device — the mDNS broadcast is skipped automatically for non-`.local` hostnames.
+If you prefer a non-`.local` hostname (e.g. `loki.home`), set it in `config.yaml` and add a static entry to `/etc/hosts` on each client device. `loki` skips the mDNS broadcast for non-`.local` hostnames.
 
 ### `LOKI_ROOT`
 
-By default, loki resolves all paths (`config.yaml`, `Caddyfile`, `.env`, `data/kiwix/`) relative to the current working directory. Run every `loki` command from the repository root, or set `LOKI_ROOT` to point elsewhere:
+By default, loki resolves all paths (`config.yaml`, `Caddyfile`, `.env`, `models.ini`, `data/kiwix/`) relative to the current working directory. Run every `loki` command from the repository root, or set `LOKI_ROOT` to point elsewhere:
 
 ```bash
 export LOKI_ROOT=/path/to/loki
 loki setup
 ```
 
-`loki setup` offers to add this export to your shell profile automatically (step 6).
+`loki setup` offers to add this export to your shell profile automatically (step 5).
 
-### Manual Ollama network binding
+### Building for a different GPU
 
-If you skipped step 5 during setup, configure it manually:
-
-```bash
-sudo mkdir -p /etc/systemd/system/ollama.service.d
-sudo tee /etc/systemd/system/ollama.service.d/override.conf <<'EOF'
-[Service]
-Environment="OLLAMA_HOST=0.0.0.0:11434"
-EOF
-sudo systemctl daemon-reload
-sudo systemctl restart ollama
-```
+Set `llama.gpu_targets` (and `strata.gpu_targets`) to your GPU's architecture (`rocminfo | grep gfx`, for example `gfx1201`) and run `loki update`. Each image keeps only the ROCm BLAS kernels for that architecture, so it holds a single target.
 
 ---
 
@@ -150,7 +251,7 @@ pre-commit install
 pytest
 ```
 
-Linting mirrors CI exactly — run the same checks locally with:
+Linting mirrors CI exactly; run the same checks locally with:
 
 ```bash
 ruff format --check .

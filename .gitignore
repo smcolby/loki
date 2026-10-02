@@ -213,6 +213,8 @@ __marimo__/
 config.yaml
 Caddyfile
 .env
+models.ini
+compose.engines.yaml
 
 # Runtime data
 data/

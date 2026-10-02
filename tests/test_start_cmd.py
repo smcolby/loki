@@ -1,167 +1,133 @@
-"""Tests for the start subcommand — Ollama health check, model pull, compose up, and mDNS."""
+"""Tests for the start subcommand: generated files, compose up, and mDNS."""
 
-import subprocess
-
-import requests
+import yaml
 from click.testing import CliRunner
 
 from loki.cli import cli
-from loki.config import LokiConfig, PortsConfig
+from loki.config import LokiConfig
 
 
-def test_start_pulls_models_and_runs_compose(mocker, sample_config):
-    """The start command pulls each configured model then starts the compose stack."""
+def test_start_runs_compose_up(mocker, sample_config):
+    """The start command brings the compose stack up detached, removing orphaned containers."""
     mocker.patch("loki.cli.load_config", return_value=sample_config)
-    mock_response = mocker.MagicMock(spec=requests.Response)
-    mock_response.status_code = 200
-    mocker.patch("loki.cli.requests.get", autospec=True, return_value=mock_response)
-    mock_run = mocker.patch("loki.cli.subprocess.run", autospec=True)
-
-    CliRunner().invoke(cli, ["start"])
-
-    calls = mock_run.call_args_list
-    assert any(call.args[0] == ["ollama", "pull", "llama3:8b"] for call in calls)
-    assert any("compose" in call.args[0] and "up" in call.args[0] for call in calls)
-
-
-def test_start_compose_called_after_model_pull(mocker, sample_config):
-    """The start command calls docker compose up -d after all ollama pull commands."""
-    mocker.patch("loki.cli.load_config", return_value=sample_config)
-    mock_response = mocker.MagicMock(spec=requests.Response)
-    mock_response.status_code = 200
-    mocker.patch("loki.cli.requests.get", autospec=True, return_value=mock_response)
     mock_run = mocker.patch("loki.cli.subprocess.run", autospec=True)
 
     CliRunner().invoke(cli, ["start"])
 
     commands = [call.args[0] for call in mock_run.call_args_list]
-    compose_index = next(i for i, cmd in enumerate(commands) if "compose" in cmd)
-    pull_indices = [i for i, cmd in enumerate(commands) if "ollama" in cmd and "pull" in cmd]
-    assert all(i < compose_index for i in pull_indices), (
-        "All ollama pull calls should precede docker compose up -d."
+    assert any(
+        cmd[:2] == ["docker", "compose"] and cmd[-3:] == ["up", "-d", "--remove-orphans"]
+        for cmd in commands
     )
 
 
-def test_start_uses_configured_ollama_port(mocker, sample_config):
-    """The start command pings the Ollama port specified in config."""
-    config = sample_config.model_copy(update={"ports": PortsConfig(ollama=12000)})
-    mocker.patch("loki.cli.load_config", return_value=config)
-    mock_response = mocker.MagicMock(spec=requests.Response)
-    mock_response.status_code = 200
-    mock_get = mocker.patch("loki.cli.requests.get", autospec=True, return_value=mock_response)
-    mocker.patch("loki.cli.subprocess.run", autospec=True)
+def test_start_writes_models_preset(mocker, sample_config, tmp_path, write_preset):
+    """The start command regenerates models.ini from the presets under models_dir."""
+    mocker.patch("loki.cli.load_config", return_value=sample_config)
+    write_preset(sample_config.llama.models_dir, "alpha")
+
+    result = CliRunner().invoke(cli, ["start"])
+
+    assert "[alpha]" in (tmp_path / "models.ini").read_text()
+    assert "alpha" in result.output
+
+
+def test_start_writes_env_file(mocker, sample_config, tmp_path):
+    """The start command rewrites .env so config edits reach Compose."""
+    mocker.patch("loki.cli.load_config", return_value=sample_config)
 
     CliRunner().invoke(cli, ["start"])
 
-    pinged_url = mock_get.call_args_list[0].args[0]
-    assert ":12000" in pinged_url
+    assert "LLAMA_CPP_REF=abc123" in (tmp_path / ".env").read_text()
 
 
-def test_start_warns_when_ollama_offline(mocker, sample_config):
-    """The start command prints a warning when Ollama is not reachable."""
+def test_start_aborts_on_invalid_preset(mocker, sample_config, tmp_path, write_preset):
+    """The start command exits without starting the stack when a preset is invalid."""
     mocker.patch("loki.cli.load_config", return_value=sample_config)
-    mocker.patch(
-        "loki.cli.requests.get",
-        autospec=True,
-        side_effect=requests.exceptions.ConnectionError,
-    )
-    mocker.patch("loki.cli.subprocess.run", autospec=True)
+    write_preset(sample_config.llama.models_dir, "broken", "[broken]\nmodel = missing.gguf\n")
+    mock_run = mocker.patch("loki.cli.subprocess.run", autospec=True)
 
     result = CliRunner().invoke(cli, ["start"])
 
-    assert "Warning" in result.output
-    assert "OLLAMA_HOST" in result.output
+    assert result.exit_code != 0
+    assert "invalid model preset" in result.output
+    mock_run.assert_not_called()
+    assert not (tmp_path / "models.ini").exists()
 
 
-def test_start_warns_when_ollama_not_network_reachable(mocker, sample_config):
-    """The start command warns when Ollama is running on localhost but not on the LAN IP."""
+def test_start_warns_when_no_presets(mocker, sample_config):
+    """The start command warns when the models directory has no presets."""
     mocker.patch("loki.cli.load_config", return_value=sample_config)
-    # conftest stubs get_local_ip to "192.168.1.100"
-    ok = mocker.MagicMock(spec=requests.Response)
-    ok.status_code = 200
-    # Localhost Ollama check succeeds; LAN IP network check fails.
-    mocker.patch(
-        "loki.cli.requests.get",
-        autospec=True,
-        side_effect=[ok, requests.exceptions.ConnectionError("refused")],
-    )
-    mocker.patch("loki.cli.subprocess.run", autospec=True)
 
     result = CliRunner().invoke(cli, ["start"])
 
-    assert "Warning" in result.output
-    assert "127.0.0.1" in result.output
-    assert "OLLAMA_HOST=0.0.0.0" in result.output
+    assert "no */preset.ini" in result.output
 
 
-def test_start_no_network_warning_when_ollama_offline(mocker, sample_config):
-    """The start command does not emit a network binding warning when Ollama is fully offline."""
+def test_start_prints_api_url_with_engines(mocker, sample_config):
+    """The start command prints the gateway API address and the engines behind it."""
     mocker.patch("loki.cli.load_config", return_value=sample_config)
-    mocker.patch(
-        "loki.cli.requests.get",
-        autospec=True,
-        side_effect=requests.exceptions.ConnectionError,
-    )
-    mocker.patch("loki.cli.subprocess.run", autospec=True)
 
     result = CliRunner().invoke(cli, ["start"])
 
-    # The general offline warning mentions OLLAMA_HOST but the specific network
-    # binding warning ("bound to 127.0.0.1 only") should not appear.
-    assert "bound to 127.0.0.1 only" not in result.output
+    assert "Model API (llama): http://loki.local:8090/v1" in result.output
 
 
-def test_start_still_runs_compose_when_ollama_offline(mocker, sample_config):
-    """The start command still runs docker compose up -d even when Ollama is unreachable."""
+def test_start_writes_strata_services_and_routes(
+    mocker, sample_config, tmp_path, add_strata_engines
+):
+    """With Strata engines configured, start writes their services and routes each one."""
+    add_strata_engines(sample_config, "qwen", "swift")
     mocker.patch("loki.cli.load_config", return_value=sample_config)
-    mocker.patch(
-        "loki.cli.requests.get",
-        autospec=True,
-        side_effect=requests.exceptions.ConnectionError,
-    )
+
+    result = CliRunner().invoke(cli, ["start"])
+
+    env = (tmp_path / ".env").read_text()
+    assert "strata-qwen=http://strata-qwen:8080,strata-swift=http://strata-swift:8080\n" in env
+    services = yaml.safe_load((tmp_path / "compose.engines.yaml").read_text())["services"]
+    assert list(services) == ["strata-qwen", "strata-swift"]
+    assert "Model API (llama, strata-qwen, strata-swift)" in result.output
+
+
+def test_start_aborts_when_strata_config_missing(
+    mocker, sample_config, tmp_path, add_strata_engines
+):
+    """A configured engine without its engine config stops start before writing or starting."""
+    data_dir = add_strata_engines(sample_config, "qwen", "swift")
+    (data_dir / "swift.json").unlink()
+    mocker.patch("loki.cli.load_config", return_value=sample_config)
+    mock_run = mocker.patch("loki.cli.subprocess.run", autospec=True)
+
+    result = CliRunner().invoke(cli, ["start"])
+
+    assert result.exit_code != 0
+    assert f"Strata engine config not found: {data_dir / 'swift.json'}" in result.output
+    mock_run.assert_not_called()
+    assert not (tmp_path / ".env").exists()
+
+
+def test_start_uses_both_compose_files(mocker, sample_config, tmp_path):
+    """Every Compose call reads compose.yaml and the generated engines file."""
+    mocker.patch("loki.cli.load_config", return_value=sample_config)
+    mocker.patch("loki.cli.loki_root", return_value=tmp_path)
     mock_run = mocker.patch("loki.cli.subprocess.run", autospec=True)
 
     CliRunner().invoke(cli, ["start"])
 
-    commands = [call.args[0] for call in mock_run.call_args_list]
-    assert any("compose" in cmd and "up" in cmd and "-d" in cmd for cmd in commands)
+    cmd = mock_run.call_args_list[0].args[0]
+    files = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "-f"]
+    assert files == [str(tmp_path / "compose.yaml"), str(tmp_path / "compose.engines.yaml")]
 
 
-def test_start_no_models_skips_pull(mocker):
-    """The start command does not call ollama pull when ollama_models is empty."""
-    mocker.patch("loki.cli.load_config", return_value=LokiConfig())
-    mock_response = mocker.MagicMock(spec=requests.Response)
-    mock_response.status_code = 200
-    mocker.patch("loki.cli.requests.get", autospec=True, return_value=mock_response)
-    mock_run = mocker.patch("loki.cli.subprocess.run", autospec=True)
-
-    CliRunner().invoke(cli, ["start"])
-
-    commands = [call.args[0] for call in mock_run.call_args_list]
-    assert not any("ollama" in cmd and "pull" in cmd for cmd in commands)
-
-
-def test_start_warns_on_failed_model_pull(mocker, sample_config):
-    """The start command prints a warning when ollama pull exits with a non-zero code."""
+def test_start_exits_when_docker_not_found(mocker, sample_config):
+    """The start command exits with an error message when docker is not on PATH."""
     mocker.patch("loki.cli.load_config", return_value=sample_config)
-    mock_response = mocker.MagicMock(spec=requests.Response)
-    mock_response.status_code = 200
-    mocker.patch("loki.cli.requests.get", autospec=True, return_value=mock_response)
-    failed = mocker.MagicMock(spec=subprocess.CompletedProcess)
-    failed.returncode = 1
-    success = mocker.MagicMock(spec=subprocess.CompletedProcess)
-    success.returncode = 0
-    # First call is ollama pull (fails), second is docker compose up (succeeds).
-    mocker.patch(
-        "loki.cli.subprocess.run",
-        autospec=True,
-        side_effect=[failed, success],
-    )
+    mocker.patch("loki.cli.shutil.which", return_value=None)
 
     result = CliRunner().invoke(cli, ["start"])
 
-    assert "Warning" in result.output
-    assert "llama3:8b" in result.output
+    assert result.exit_code != 0
+    assert "docker" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -172,10 +138,6 @@ def test_start_warns_on_failed_model_pull(mocker, sample_config):
 def test_start_broadcasts_mdns_for_local_url(mocker, sample_config):
     """The start command spawns avahi-publish-address when the URL ends in .local."""
     mocker.patch("loki.cli.load_config", return_value=sample_config)
-    mock_response = mocker.MagicMock(spec=requests.Response)
-    mock_response.status_code = 200
-    mocker.patch("loki.cli.requests.get", autospec=True, return_value=mock_response)
-    mocker.patch("loki.cli.subprocess.run", autospec=True)
     mock_avahi = mocker.patch("loki.cli.start_avahi_publish")
 
     CliRunner().invoke(cli, ["start"])
@@ -186,10 +148,6 @@ def test_start_broadcasts_mdns_for_local_url(mocker, sample_config):
 def test_start_avahi_called_with_correct_hostname(mocker, sample_config):
     """The start command calls start_avahi_publish with the configured URL."""
     mocker.patch("loki.cli.load_config", return_value=sample_config)
-    mock_response = mocker.MagicMock(spec=requests.Response)
-    mock_response.status_code = 200
-    mocker.patch("loki.cli.requests.get", autospec=True, return_value=mock_response)
-    mocker.patch("loki.cli.subprocess.run", autospec=True)
     mock_avahi = mocker.patch("loki.cli.start_avahi_publish")
 
     CliRunner().invoke(cli, ["start"])
@@ -202,10 +160,6 @@ def test_start_skips_mdns_for_non_local_url(mocker):
     """The start command skips avahi-publish-address when the URL does not end in .local."""
     config = LokiConfig(url="loki.home")
     mocker.patch("loki.cli.load_config", return_value=config)
-    mock_response = mocker.MagicMock(spec=requests.Response)
-    mock_response.status_code = 200
-    mocker.patch("loki.cli.requests.get", autospec=True, return_value=mock_response)
-    mocker.patch("loki.cli.subprocess.run", autospec=True)
     mock_avahi = mocker.patch("loki.cli.start_avahi_publish")
 
     result = CliRunner().invoke(cli, ["start"])
@@ -217,10 +171,6 @@ def test_start_skips_mdns_for_non_local_url(mocker):
 def test_start_skips_mdns_and_warns_when_ip_unavailable(mocker, sample_config):
     """The start command warns and skips mDNS when no local IP can be determined."""
     mocker.patch("loki.cli.load_config", return_value=sample_config)
-    mock_response = mocker.MagicMock(spec=requests.Response)
-    mock_response.status_code = 200
-    mocker.patch("loki.cli.requests.get", autospec=True, return_value=mock_response)
-    mocker.patch("loki.cli.subprocess.run", autospec=True)
     mocker.patch("loki.cli.get_local_ip", return_value="")
     mock_avahi = mocker.patch("loki.cli.start_avahi_publish")
 
@@ -233,10 +183,6 @@ def test_start_skips_mdns_and_warns_when_ip_unavailable(mocker, sample_config):
 def test_start_warns_when_avahi_publish_not_installed(mocker, sample_config):
     """The start command warns and skips mDNS when avahi-publish-address is absent."""
     mocker.patch("loki.cli.load_config", return_value=sample_config)
-    mock_response = mocker.MagicMock(spec=requests.Response)
-    mock_response.status_code = 200
-    mocker.patch("loki.cli.requests.get", autospec=True, return_value=mock_response)
-    mocker.patch("loki.cli.subprocess.run", autospec=True)
     # avahi-publish-address missing; all other tools present
     mocker.patch("loki.cli.is_installed", side_effect=lambda cmd: cmd != "avahi-publish-address")
     mock_avahi = mocker.patch("loki.cli.start_avahi_publish")
