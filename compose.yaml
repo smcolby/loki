@@ -1,14 +1,52 @@
 services:
+  llama:
+    # Built locally for one GPU architecture from a pinned llama.cpp commit.
+    build:
+      context: ./llama
+      args:
+        LLAMA_CPP_REF: ${LLAMA_CPP_REF:-}
+        GPU_TARGETS: ${LLAMA_GPU_TARGETS:-gfx1100}
+        ROCM_VERSION: ${ROCM_VERSION:-7.2.4}
+    image: loki-llama:${LLAMA_GPU_TARGETS:-gfx1100}-${LLAMA_CPP_REF:-unset}
+    container_name: loki-llama
+    restart: unless-stopped
+    # Pass the AMD GPU through to the ROCm runtime.
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    security_opt:
+      - seccomp=unconfined
+    ports:
+      - "${LLAMA_PORT:-8090}:8080"
+    volumes:
+      # Mount models at their host path so preset paths resolve unchanged.
+      - ${LLAMA_MODELS_DIR:-./models}:${LLAMA_MODELS_DIR:-/models}:ro
+      - ./models.ini:/etc/llama/models.ini:ro
+    command:
+      # Serve every preset model, loading on demand and evicting the least recently used.
+      - --models-preset
+      - /etc/llama/models.ini
+      - --models-max
+      - "${LLAMA_MAX_LOADED:-1}"
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+    networks:
+      - loki-net
+
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
     container_name: loki-open-webui
     restart: always
-    # Map the container to the host gateway to access the native Ollama service.
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     environment:
-      # Point Open WebUI to the host machine's Ollama port.
-      - OLLAMA_BASE_URL=http://host.docker.internal:${OLLAMA_PORT:-11434}
+      # Reach llama-server over the Compose network; applies until Open WebUI
+      # stores its own connection settings.
+      - ENABLE_OLLAMA_API=false
+      - OPENAI_API_BASE_URL=http://llama:8080/v1
+      - OPENAI_API_KEY=none
+    depends_on:
+      - llama
     volumes:
       - ./data/open-webui:/app/backend/data
     networks:

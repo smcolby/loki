@@ -10,15 +10,13 @@ import loki.system as system
 from loki.system import (
     PACKAGE_MAP,
     add_loki_root_to_profile,
-    configure_ollama_binding,
+    amd_gpu_present,
     detect_package_manager,
     detect_shell_profile,
     get_local_ip,
     install_docker,
-    install_ollama,
     install_packages,
     is_installed,
-    is_ollama_binding_configured,
     loki_root_already_exported,
     start_avahi_publish,
     stop_avahi_publish,
@@ -171,123 +169,23 @@ def test_install_docker_returns_false_on_failure(mocker):
 
 
 # ---------------------------------------------------------------------------
-# install_ollama
+# amd_gpu_present
 # ---------------------------------------------------------------------------
 
 
-def test_install_ollama_runs_official_script(mocker):
-    """install_ollama executes the official Ollama install script."""
-    mock_run = mocker.patch(
-        "loki.system.subprocess.run",
-        autospec=True,
-        return_value=MagicMock(spec=subprocess.CompletedProcess, returncode=0),
-    )
-    install_ollama()
-    call_args = mock_run.call_args
-    assert "ollama.com/install.sh" in call_args[0][0]
-    assert call_args[1].get("shell") is True
+def test_amd_gpu_present_true_when_devices_exist(mocker, tmp_path):
+    """amd_gpu_present returns True when both device paths exist."""
+    (tmp_path / "kfd").touch()
+    (tmp_path / "dri").mkdir()
+    mocker.patch.object(system, "_AMD_GPU_DEVICES", (tmp_path / "kfd", tmp_path / "dri"))
+    assert amd_gpu_present() is True
 
 
-def test_install_ollama_returns_true_on_success(mocker):
-    """install_ollama returns True when the script exits with 0."""
-    mocker.patch(
-        "loki.system.subprocess.run",
-        autospec=True,
-        return_value=MagicMock(spec=subprocess.CompletedProcess, returncode=0),
-    )
-    assert install_ollama() is True
-
-
-def test_install_ollama_returns_false_on_failure(mocker):
-    """install_ollama returns False when the script exits non-zero."""
-    mocker.patch(
-        "loki.system.subprocess.run",
-        autospec=True,
-        return_value=MagicMock(spec=subprocess.CompletedProcess, returncode=1),
-    )
-    assert install_ollama() is False
-
-
-# ---------------------------------------------------------------------------
-# is_ollama_binding_configured
-# ---------------------------------------------------------------------------
-
-
-def test_is_ollama_binding_configured_true_when_override_exists(tmp_path, mocker):
-    """Returns True when the override file contains OLLAMA_HOST=0.0.0.0:11434."""
-    override_file = tmp_path / "override.conf"
-    override_file.write_text('[Service]\nEnvironment="OLLAMA_HOST=0.0.0.0:11434"\n')
-    mocker.patch.object(system, "_OLLAMA_OVERRIDE_FILE", override_file)
-    assert is_ollama_binding_configured() is True
-
-
-def test_is_ollama_binding_configured_false_when_port_missing(tmp_path, mocker):
-    """Returns False when the override sets OLLAMA_HOST without an explicit port.
-
-    Ollama >=0.30.5 requires the host:port form; address-only is treated as
-    not configured so loki setup rewrites it to the correct format.
-    """
-    override_file = tmp_path / "override.conf"
-    override_file.write_text('[Service]\nEnvironment="OLLAMA_HOST=0.0.0.0"\n')
-    mocker.patch.object(system, "_OLLAMA_OVERRIDE_FILE", override_file)
-    assert is_ollama_binding_configured() is False
-
-
-def test_is_ollama_binding_configured_false_when_file_missing(tmp_path, mocker):
-    """Returns False when the override file does not exist."""
-    mocker.patch.object(system, "_OLLAMA_OVERRIDE_FILE", tmp_path / "missing.conf")
-    assert is_ollama_binding_configured() is False
-
-
-def test_is_ollama_binding_configured_false_when_content_differs(tmp_path, mocker):
-    """Returns False when the override file exists but does not set OLLAMA_HOST."""
-    override_file = tmp_path / "override.conf"
-    override_file.write_text("[Service]\nEnvironment=OTHER=value\n")
-    mocker.patch.object(system, "_OLLAMA_OVERRIDE_FILE", override_file)
-    assert is_ollama_binding_configured() is False
-
-
-# ---------------------------------------------------------------------------
-# configure_ollama_binding
-# ---------------------------------------------------------------------------
-
-
-def test_configure_ollama_binding_creates_override_and_restarts(mocker):
-    """configure_ollama_binding creates the override dir, writes the file, and restarts ollama."""
-    mock_run = mocker.patch(
-        "loki.system.subprocess.run",
-        autospec=True,
-        return_value=MagicMock(spec=subprocess.CompletedProcess, returncode=0),
-    )
-    configure_ollama_binding()
-    calls_args = [call[0][0] for call in mock_run.call_args_list]
-    assert any("mkdir" in str(args) for args in calls_args)
-    assert any("tee" in str(args) for args in calls_args)
-    assert any("systemctl" in str(args) and "restart" in str(args) for args in calls_args)
-
-
-def test_configure_ollama_binding_returns_false_on_mkdir_failure(mocker):
-    """configure_ollama_binding returns False when mkdir fails."""
-    mocker.patch(
-        "loki.system.subprocess.run",
-        autospec=True,
-        return_value=MagicMock(spec=subprocess.CompletedProcess, returncode=1),
-    )
-    assert configure_ollama_binding() is False
-
-
-def test_configure_ollama_binding_returns_false_on_daemon_reload_failure(mocker):
-    """configure_ollama_binding returns False when daemon-reload fails."""
-    mocker.patch(
-        "loki.system.subprocess.run",
-        autospec=True,
-        side_effect=[
-            MagicMock(spec=subprocess.CompletedProcess, returncode=0),  # mkdir
-            MagicMock(spec=subprocess.CompletedProcess, returncode=0),  # tee
-            MagicMock(spec=subprocess.CompletedProcess, returncode=1),  # daemon-reload
-        ],
-    )
-    assert configure_ollama_binding() is False
+def test_amd_gpu_present_false_when_kfd_missing(mocker, tmp_path):
+    """amd_gpu_present returns False when the ROCm compute device is absent."""
+    (tmp_path / "dri").mkdir()
+    mocker.patch.object(system, "_AMD_GPU_DEVICES", (tmp_path / "kfd", tmp_path / "dri"))
+    assert amd_gpu_present() is False
 
 
 # ---------------------------------------------------------------------------
@@ -542,21 +440,3 @@ def test_upgrade_packages_returns_false_on_failure(mocker):
         return_value=MagicMock(spec=subprocess.CompletedProcess, returncode=1),
     )
     assert upgrade_packages(["aria2"], "apt-get") is False
-
-
-# ---------------------------------------------------------------------------
-# configure_ollama_binding — tee failure
-# ---------------------------------------------------------------------------
-
-
-def test_configure_ollama_binding_returns_false_on_tee_failure(mocker):
-    """configure_ollama_binding returns False when the tee step fails."""
-    mocker.patch(
-        "loki.system.subprocess.run",
-        autospec=True,
-        side_effect=[
-            MagicMock(spec=subprocess.CompletedProcess, returncode=0),  # mkdir
-            MagicMock(spec=subprocess.CompletedProcess, returncode=1),  # tee
-        ],
-    )
-    assert configure_ollama_binding() is False

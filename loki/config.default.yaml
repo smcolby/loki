@@ -8,15 +8,30 @@ url: loki.local
 ports:
   caddy: 80      # Port for the Caddy reverse proxy (Open WebUI).
   kiwix: 8080    # Port for the Kiwix offline knowledge server.
-  ollama: 11434  # Port for the native Ollama service (used for health checks).
+  llama: 8090    # Port for the llama-server OpenAI-compatible API.
+
+# llama-server runs in a container built for one AMD GPU from a pinned llama.cpp commit.
+llama:
+  # Each subdirectory holding a preset.ini is served as one model (see README).
+  models_dir: ~/.llms
+  ref: 5d806aa2575e01e126651fd69ab1ab6cefff861d  # llama.cpp commit to build
+  gpu_targets: gfx1100   # AMD GPU architecture (rocminfo | grep gfx)
+  rocm_version: 7.2.4    # ROCm build toolchain and bundled runtime
+  max_loaded: 1          # Models kept in VRAM at once; least recently used is unloaded
+  # Options every model gets unless its preset.ini overrides them
+  # (llama-server long option names without the leading dashes).
+  defaults:
+    n-gpu-layers: 99     # Keep every layer on the GPU
+    fit: "off"           # Fail loudly instead of shrinking context or layers to fit
+    flash-attn: "on"
+    cache-type-k: q4_0   # Quantized KV cache for long contexts
+    cache-type-v: q4_0
+    parallel: 1          # One request slot, so the full context goes to it
+    cache-ram: 8192      # MiB of host RAM for reusable prompt prefixes
+    ctx-checkpoints: 32
 
 # ZIM archives to download during `loki setup`.
 # Each entry requires a name (used for display) and a direct download URL.
 kiwix_files:
   - name: wikipedia_en_all_nopic
     url: https://download.kiwix.org/zim/wikipedia/wikipedia_en_all_nopic_2025-12.zim
-
-# Ollama model tags to pull during `loki start`.
-# Run `ollama list` to see which models are already available on your system.
-ollama_models:
-  - qwen3.5:9b

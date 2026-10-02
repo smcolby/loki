@@ -6,10 +6,8 @@ import signal
 import subprocess
 from pathlib import Path
 
-_OLLAMA_OVERRIDE_DIR = Path("/etc/systemd/system/ollama.service.d")
-_OLLAMA_OVERRIDE_FILE = _OLLAMA_OVERRIDE_DIR / "override.conf"
-# Ollama >=0.30.5 requires the explicit port in OLLAMA_HOST; address-only no longer works.
-_OLLAMA_OVERRIDE_CONTENT = '[Service]\nEnvironment="OLLAMA_HOST=0.0.0.0:11434"\n'
+# Device nodes the ROCm runtime opens inside the llama-server container
+_AMD_GPU_DEVICES = (Path("/dev/kfd"), Path("/dev/dri"))
 
 # Package names indexed by package manager and the command they provide
 PACKAGE_MAP: dict[str, dict[str, str]] = {
@@ -124,74 +122,15 @@ def install_docker() -> bool:
     return True
 
 
-def install_ollama() -> bool:
-    """Install Ollama via the official install script.
-
-    Uses ``shell=True`` intentionally — the official Ollama installer is a shell
-    pipeline from a vendor-controlled URL with no user-supplied input.
+def amd_gpu_present() -> bool:
+    """Return whether the amdgpu kernel driver exposes the devices ROCm needs.
 
     Returns
     -------
     bool
-        ``True`` if the install script exited with code 0, ``False`` otherwise.
+        ``True`` if both ``/dev/kfd`` and ``/dev/dri`` exist, ``False`` otherwise.
     """
-    result = subprocess.run(  # noqa: S602
-        "curl -fsSL https://ollama.com/install.sh | sh",
-        shell=True,
-        check=False,
-    )
-    return result.returncode == 0
-
-
-def is_ollama_binding_configured() -> bool:
-    """Return whether the Ollama systemd override sets ``OLLAMA_HOST`` with an explicit port.
-
-    Checks for the ``host:port`` form required by Ollama >=0.30.5. An override
-    containing only ``OLLAMA_HOST=0.0.0.0`` (no port) is treated as not configured
-    so that ``loki setup`` rewrites it to the correct format.
-
-    Returns
-    -------
-    bool
-        ``True`` if the override file exists and contains ``OLLAMA_HOST=0.0.0.0:11434``,
-        ``False`` otherwise (including on permission or file-not-found errors).
-    """
-    try:
-        return "OLLAMA_HOST=0.0.0.0:11434" in _OLLAMA_OVERRIDE_FILE.read_text()
-    except (FileNotFoundError, PermissionError):
-        return False
-
-
-def configure_ollama_binding() -> bool:
-    """Create the Ollama systemd override and restart the service.
-
-    Uses ``sudo mkdir`` and ``sudo tee`` to write the override file without
-    requiring a shell redirect. Reloads the systemd daemon before restarting
-    so the new environment variable takes effect.
-
-    Returns
-    -------
-    bool
-        ``True`` if all four subprocess steps (mkdir, tee, daemon-reload,
-        restart) exit with code 0, ``False`` at the first failure.
-    """
-    result = subprocess.run(["sudo", "mkdir", "-p", str(_OLLAMA_OVERRIDE_DIR)], check=False)
-    if result.returncode != 0:
-        return False
-    tee = subprocess.run(
-        ["sudo", "tee", str(_OLLAMA_OVERRIDE_FILE)],
-        input=_OLLAMA_OVERRIDE_CONTENT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if tee.returncode != 0:
-        return False
-    result = subprocess.run(["sudo", "systemctl", "daemon-reload"], check=False)
-    if result.returncode != 0:
-        return False
-    result = subprocess.run(["sudo", "systemctl", "restart", "ollama"], check=False)
-    return result.returncode == 0
+    return all(device.exists() for device in _AMD_GPU_DEVICES)
 
 
 def detect_shell_profile() -> Path:

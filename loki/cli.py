@@ -9,6 +9,7 @@ import click
 import requests
 
 from loki.config import (
+    LokiConfig,
     avahi_pid_file,
     build_caddyfile,
     build_env_file,
@@ -17,24 +18,26 @@ from loki.config import (
     kiwix_dir,
     load_config,
     loki_root,
+    models_preset_path,
 )
+from loki.presets import PresetError, build_models_preset
 from loki.system import (
     PACKAGE_MAP,
     add_loki_root_to_profile,
-    configure_ollama_binding,
+    amd_gpu_present,
     detect_package_manager,
     detect_shell_profile,
     get_local_ip,
     install_docker,
-    install_ollama,
     install_packages,
     is_installed,
-    is_ollama_binding_configured,
     loki_root_already_exported,
     start_avahi_publish,
     stop_avahi_publish,
     upgrade_packages,
 )
+
+LLAMA_IMAGE = "loki-llama"
 
 
 def _require_tool(name: str) -> None:
@@ -56,23 +59,50 @@ def _require_tool(name: str) -> None:
         raise SystemExit(f"Error: '{name}' is not installed or not on PATH.")
 
 
-def _parse_ollama_list(output: str) -> list[str]:
-    """Parse ``ollama list`` stdout and return the list of installed model names.
+def _compose(*args: str) -> list[str]:
+    """Return a ``docker compose`` command rooted at ``LOKI_ROOT``."""
+    return ["docker", "compose", "--project-directory", str(loki_root()), *args]
+
+
+def _llama_image_tag(config: LokiConfig) -> str:
+    """Return the image tag Compose builds for the configured GPU target and commit."""
+    return f"{config.llama.gpu_targets}-{config.llama.ref}"
+
+
+def _write_generated_files(config: LokiConfig) -> bool:
+    """Write the Caddyfile, ``.env``, and ``models.ini`` derived from ``config``.
 
     Parameters
     ----------
-    output : str
-        Raw stdout captured from ``ollama list``.
+    config : LokiConfig
+        Configuration to render.
 
     Returns
     -------
-    list of str
-        Model name tags extracted from the output (e.g. ``["llama3:8b"]``).
+    bool
+        ``True`` when every file was written, ``False`` when a model preset is
+        invalid (the error is printed and ``models.ini`` is left untouched).
     """
-    lines = output.strip().splitlines()
-    if len(lines) < 2:
-        return []
-    return [line.split()[0] for line in lines[1:] if line.strip()]
+    caddyfile_path().write_text(build_caddyfile(config.url))
+    env_file_path().write_text(build_env_file(config))
+
+    # Collect every model preset under the models directory
+    models_dir = config.llama.models_dir
+    try:
+        preset, model_ids = build_models_preset(models_dir, config.llama.defaults)
+    except PresetError as exc:
+        click.echo(f"Error: invalid model preset: {exc}", err=True)
+        return False
+    models_preset_path().write_text(preset)
+
+    if model_ids:
+        click.echo(f"Models from {models_dir}: {', '.join(model_ids)}")
+    else:
+        click.echo(
+            f"Warning: no */preset.ini under {models_dir}; llama-server will serve no models.",
+            err=True,
+        )
+    return True
 
 
 def _aria2c_threads() -> int:
@@ -80,53 +110,54 @@ def _aria2c_threads() -> int:
     return max(1, (os.cpu_count() or 2) // 2)
 
 
-def _ollama_warning(port: int) -> str:
-    """Return a warning message when the Ollama service is unreachable.
+def _llama_model_states(port: int) -> dict[str, str]:
+    """Return each served model id mapped to its router status.
 
     Parameters
     ----------
     port : int
-        The port on which Ollama was expected to be listening.
+        Host port of the llama-server router.
 
     Returns
     -------
-    str
-        Multi-line warning with instructions for resolving connectivity issues.
+    dict of str to str
+        Model id to status (``"loaded"``, ``"unloaded"``, ``"loading"``, ...);
+        empty when the listing cannot be read.
     """
-    return (
-        f"Warning: Ollama does not appear to be running at http://localhost:{port}.\n"
-        "Ensure the Ollama service is active: sudo systemctl start ollama\n"
-        "\n"
-        "Ollama binds to 127.0.0.1 by default; Docker containers reach it via\n"
-        "host.docker.internal, which requires Ollama to listen on all interfaces.\n"
-        "Run `loki setup` to configure the OLLAMA_HOST systemd override automatically.\n"
-    )
+    try:
+        r = requests.get(f"http://localhost:{port}/v1/models", timeout=5)
+        entries = r.json()["data"] if r.status_code == 200 else []
+    except (requests.exceptions.RequestException, ValueError, KeyError, TypeError):
+        return {}
+    if not isinstance(entries, list):
+        return {}
+
+    states: dict[str, str] = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or "id" not in entry:
+            continue
+        status = entry.get("status")
+        if isinstance(status, dict):
+            status = status.get("value")
+        states[str(entry["id"])] = "unknown" if status is None else str(status)
+    return states
 
 
-def _ollama_network_reachable(port: int, local_ip: str) -> bool:
-    """Return whether Ollama is reachable via the host's LAN IP address.
-
-    Connecting over the LAN IP (rather than loopback) mirrors what Docker
-    containers do via ``host.docker.internal``. A False result means Ollama
-    is bound to 127.0.0.1 only and containers cannot reach it.
+def _build_llama_image(pull: bool = False) -> bool:
+    """Build the llama-server image through Compose.
 
     Parameters
     ----------
-    port : int
-        The port Ollama is configured to listen on.
-    local_ip : str
-        The host's primary LAN IP address.
+    pull : bool, optional
+        Refresh the ROCm base image before building. Default is ``False``.
 
     Returns
     -------
     bool
-        ``True`` if Ollama responds with HTTP 200 on the LAN IP, ``False`` otherwise.
+        ``True`` if ``docker compose build`` exited with code 0.
     """
-    try:
-        r = requests.get(f"http://{local_ip}:{port}/api/tags", timeout=5)
-        return r.status_code == 200
-    except requests.exceptions.RequestException:
-        return False
+    args = ["build", "--pull", "llama"] if pull else ["build", "llama"]
+    return subprocess.run(_compose(*args), check=False).returncode == 0
 
 
 @click.group()
@@ -138,11 +169,11 @@ def cli() -> None:
 def setup() -> None:
     """Run the interactive loki setup wizard.
 
-    Walks through six steps in order: config review, system-package installation
-    (aria2, avahi-daemon, avahi-utils), Docker installation, Ollama installation,
-    Ollama network-binding configuration, and ``LOKI_ROOT`` shell-profile export.
-    After all system steps, writes the Caddyfile and ``.env`` port configuration
-    and downloads any ZIM files listed in ``config.yaml``.
+    Walks through config review, system-package installation (aria2,
+    avahi-daemon, avahi-utils), Docker installation, an AMD GPU check, and the
+    ``LOKI_ROOT`` shell-profile export. Then writes the Caddyfile, ``.env``, and
+    ``models.ini``, offers to build the llama-server image, and downloads any
+    ZIM files listed in ``config.yaml``.
     """
     config_path = loki_root() / "config.yaml"
     if not config_path.exists():
@@ -208,41 +239,15 @@ def setup() -> None:
     else:
         click.echo("Docker already installed.")
 
-    # Install Ollama
-    if not is_installed("ollama"):
-        click.echo("\nOllama is not installed.")
-        if click.confirm("Install Ollama via the official script?", default=True):
-            if install_ollama():
-                click.echo("Ollama installed.")
-            else:
-                click.echo(
-                    "Warning: Ollama installation failed. See README for manual instructions.",
-                    err=True,
-                )
-        else:
-            click.echo("Skipping — see README for manual instructions.")
+    # Check for the AMD GPU device nodes llama-server needs
+    if amd_gpu_present():
+        click.echo("AMD GPU devices found (/dev/kfd, /dev/dri).")
     else:
-        click.echo("Ollama already installed.")
-
-    # Configure Ollama network binding
-    if not is_ollama_binding_configured():
-        click.echo("\nOllama is not configured to bind to all interfaces (required for Docker).")
-        if click.confirm(
-            "Configure Ollama binding with sudo (creates systemd override)?",
-            default=True,
-        ):
-            if configure_ollama_binding():
-                click.echo("Ollama binding configured.")
-            else:
-                click.echo(
-                    "Warning: Ollama binding configuration failed. "
-                    "See README for manual instructions.",
-                    err=True,
-                )
-        else:
-            click.echo("Skipping — see README for manual instructions.")
-    else:
-        click.echo("Ollama binding already configured (OLLAMA_HOST=0.0.0.0:11434).")
+        click.echo(
+            "Warning: /dev/kfd or /dev/dri is missing; install the amdgpu kernel driver "
+            "before starting llama-server.",
+            err=True,
+        )
 
     # Add LOKI_ROOT to shell profile
     current_root = loki_root()
@@ -271,15 +276,27 @@ def setup() -> None:
 
     click.echo("")
 
-    caddyfile_path().write_text(build_caddyfile(config.url))
-    click.echo(f"Caddyfile written for http://{config.url}")
-
+    # Write the Caddyfile, .env, and models.ini
+    _write_generated_files(config)
     ports = config.ports
-    env_file_path().write_text(build_env_file(ports))
+    click.echo(f"Caddyfile written for http://{config.url}")
     click.echo(
-        f"Port configuration written: caddy={ports.caddy}, "
-        f"kiwix={ports.kiwix}, ollama={ports.ollama}"
+        f"Port configuration written: caddy={ports.caddy}, kiwix={ports.kiwix}, llama={ports.llama}"
     )
+
+    # Build the llama-server image for the configured GPU and commit
+    if is_installed("docker"):
+        tag = _llama_image_tag(config)
+        if click.confirm(
+            f"\nBuild the llama-server image {LLAMA_IMAGE}:{tag} now (10-20 minutes)?",
+            default=True,
+        ):
+            if _build_llama_image():
+                click.echo("llama-server image built.")
+            else:
+                click.echo("Warning: llama-server image build failed.", err=True)
+        else:
+            click.echo("Skipping; `loki start` builds the image if it is missing.")
 
     dest = kiwix_dir()
     dest.mkdir(parents=True, exist_ok=True)
@@ -314,11 +331,12 @@ def setup() -> None:
 
 @cli.command()
 def update() -> None:
-    """Update system packages, Ollama, and Docker Compose images.
+    """Update system packages, Docker Compose images, and the llama-server image.
 
     Upgrades aria2, avahi-daemon, and avahi-utils via the system package manager,
-    re-runs the official Ollama install script (which upgrades in place), and pulls
-    the latest Docker images before restarting the Compose stack if it is running.
+    pulls the latest published images, rebuilds the llama-server image on a
+    refreshed ROCm base for the configured commit, and restarts the Compose
+    stack if it is running.
     """
     # System packages
     manager = detect_package_manager()
@@ -339,86 +357,45 @@ def update() -> None:
             err=True,
         )
 
-    # Ollama
-    if is_installed("ollama"):
-        click.echo("\nUpgrading Ollama ...")
-        if install_ollama():
-            click.echo("Ollama upgraded.")
-        else:
-            click.echo("Warning: Ollama upgrade failed.", err=True)
-    else:
-        click.echo("\nOllama is not installed; skipping. Run `loki setup` to install.")
-
-    # Docker images
+    # Published Docker images
     _require_tool("docker")
+    config = load_config()
     click.echo("\nPulling latest Docker images ...")
-    pull = subprocess.run(
-        ["docker", "compose", "--project-directory", str(loki_root()), "pull"],
-        check=False,
-    )
+    pull = subprocess.run(_compose("pull", "--ignore-buildable"), check=False)
     if pull.returncode != 0:
         click.echo("Warning: docker compose pull failed.", err=True)
         return
 
+    # Locally built llama-server image
+    if not _write_generated_files(config):
+        return
+    click.echo(f"\nRebuilding {LLAMA_IMAGE}:{_llama_image_tag(config)} ...")
+    if not _build_llama_image(pull=True):
+        click.echo("Warning: llama-server image build failed.", err=True)
+        return
+
     # Restart the stack only if it is already running
-    result = subprocess.run(
-        ["docker", "compose", "--project-directory", str(loki_root()), "ps", "-q"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = subprocess.run(_compose("ps", "-q"), capture_output=True, text=True, check=False)
     if result.stdout.strip():
         click.echo("Restarting Docker Compose stack with updated images ...")
-        subprocess.run(
-            ["docker", "compose", "--project-directory", str(loki_root()), "up", "-d"],
-            check=False,
-        )
+        subprocess.run(_compose("up", "-d"), check=False)
     else:
-        click.echo("Docker images pulled. Start the stack with `loki start` when ready.")
+        click.echo("Docker images updated. Start the stack with `loki start` when ready.")
 
 
 @cli.command()
 def start() -> None:
-    """Pull Ollama models, start the Docker Compose stack, and broadcast mDNS."""
-    _require_tool("ollama")
+    """Write generated files, start the Docker Compose stack, and broadcast mDNS."""
     _require_tool("docker")
     config = load_config()
-    ollama_url = f"http://localhost:{config.ports.ollama}/api/tags"
 
-    try:
-        response = requests.get(ollama_url, timeout=5)
-        ollama_online = response.status_code == 200
-    except requests.exceptions.RequestException:
-        ollama_online = False
-
-    if not ollama_online:
-        click.echo(_ollama_warning(config.ports.ollama), err=True)
-    else:
-        local_ip = get_local_ip()
-        if local_ip and not _ollama_network_reachable(config.ports.ollama, local_ip):
-            click.echo(
-                f"Warning: Ollama is running but not reachable at "
-                f"http://{local_ip}:{config.ports.ollama}.\n"
-                "It is likely bound to 127.0.0.1 only — Docker containers cannot reach it.\n"
-                "Run `loki setup` to configure OLLAMA_HOST=0.0.0.0:11434, then:\n"
-                "  sudo systemctl restart ollama",
-                err=True,
-            )
-
-    for model in config.ollama_models:
-        click.echo(f"Pulling Ollama model: {model}")
-        result = subprocess.run(["ollama", "pull", model], check=False)
-        if result.returncode != 0:
-            click.echo(
-                f"Warning: failed to pull {model} (exit code {result.returncode}).",
-                err=True,
-            )
+    # Refresh models.ini so preset edits take effect on this start
+    if not _write_generated_files(config):
+        raise SystemExit(1)
 
     click.echo("Starting Docker Compose stack ...")
-    subprocess.run(
-        ["docker", "compose", "--project-directory", str(loki_root()), "up", "-d"],
-        check=False,
-    )
+    subprocess.run(_compose("up", "-d"), check=False)
+    click.echo(f"llama-server API: http://{config.url}:{config.ports.llama}/v1")
 
     hostname = config.url
     if hostname.endswith(".local"):
@@ -448,10 +425,7 @@ def stop() -> None:
     _require_tool("docker")
     stop_avahi_publish(avahi_pid_file())
     click.echo("Stopping Docker Compose stack ...")
-    subprocess.run(
-        ["docker", "compose", "--project-directory", str(loki_root()), "down"],
-        check=False,
-    )
+    subprocess.run(_compose("down"), check=False)
 
 
 @cli.command()
@@ -460,35 +434,23 @@ def status() -> None:
     config = load_config()
     click.echo("Checking service status ...")
 
-    # Ollama — reachable on loopback
-    ollama_url = f"http://localhost:{config.ports.ollama}/api/tags"
+    # llama-server router health
+    llama_url = f"http://localhost:{config.ports.llama}/health"
     try:
-        r = requests.get(ollama_url, timeout=5)
-        ollama_online = r.status_code == 200
-        if ollama_online:
-            click.echo(f"  Ollama: ONLINE ({ollama_url})")
+        r = requests.get(llama_url, timeout=5)
+        llama_online = r.status_code == 200
+        if llama_online:
+            click.echo(f"  llama-server: ONLINE ({llama_url})")
         else:
-            click.echo(f"  Ollama: OFFLINE — HTTP {r.status_code} ({ollama_url})")
+            click.echo(f"  llama-server: OFFLINE — HTTP {r.status_code} ({llama_url})")
     except requests.exceptions.RequestException as exc:
-        ollama_online = False
-        click.echo(f"  Ollama: OFFLINE — {exc} ({ollama_url})")
+        llama_online = False
+        click.echo(f"  llama-server: OFFLINE — {exc} ({llama_url})")
 
-    # Ollama — reachable on LAN IP (mirrors how Docker containers connect)
-    local_ip = get_local_ip()
-    if local_ip:
-        network_url = f"http://{local_ip}:{config.ports.ollama}/api/tags"
-        if _ollama_network_reachable(config.ports.ollama, local_ip):
-            click.echo(f"  Ollama (network): ONLINE ({network_url})")
-        else:
-            click.echo(f"  Ollama (network): OFFLINE ({network_url})")
-            if ollama_online:
-                click.echo(
-                    "    Ollama is bound to 127.0.0.1 only — Docker containers cannot reach it.\n"
-                    "    Run `loki setup` to configure OLLAMA_HOST=0.0.0.0:11434, then:\n"
-                    "      sudo systemctl restart ollama"
-                )
-    else:
-        click.echo("  Ollama (network): SKIP — could not determine local IP")
+    # Served models and which are in VRAM
+    if llama_online:
+        for model_id, state in _llama_model_states(config.ports.llama).items():
+            click.echo(f"    {model_id}: {state}")
 
     # Kiwix
     kiwix_url = f"http://localhost:{config.ports.kiwix}"
@@ -503,7 +465,7 @@ def status() -> None:
 
     # Docker containers
     if shutil.which("docker"):
-        for name in ("loki-open-webui", "loki-caddy", "loki-kiwix"):
+        for name in ("loki-llama", "loki-open-webui", "loki-caddy", "loki-kiwix"):
             result = subprocess.run(
                 ["docker", "inspect", "--format", "{{.State.Status}}", name],
                 capture_output=True,
@@ -522,8 +484,8 @@ def status() -> None:
 
 @cli.command()
 def cleanup() -> None:
-    """Remove ZIM files and Ollama models no longer listed in config."""
-    _require_tool("ollama")
+    """Remove ZIM files and llama-server images no longer matching the config."""
+    _require_tool("docker")
     config = load_config()
 
     # ZIM files
@@ -549,23 +511,28 @@ def cleanup() -> None:
     else:
         click.echo("No orphaned ZIM files found.")
 
-    # Ollama models
-    result = subprocess.run(["ollama", "list"], capture_output=True, text=True, check=False)
-    installed = _parse_ollama_list(result.stdout)
-    orphaned_models = sorted(set(installed) - set(config.ollama_models))
+    # llama-server images built for another commit or GPU target
+    result = subprocess.run(
+        ["docker", "images", LLAMA_IMAGE, "--format", "{{.Tag}}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    current = _llama_image_tag(config)
+    stale_tags = sorted({tag for tag in result.stdout.split() if tag != current})
 
-    if orphaned_models:
-        click.echo("Orphaned Ollama models not in config.yaml:")
-        for model in orphaned_models:
-            click.echo(f"  {model}")
-        if click.confirm(f"Remove {len(orphaned_models)} Ollama model(s)?", default=False):
-            for model in orphaned_models:
-                subprocess.run(["ollama", "rm", model], check=False)
-                click.echo(f"Removed {model}.")
+    if stale_tags:
+        click.echo(f"Old {LLAMA_IMAGE} images not matching config.yaml:")
+        for tag in stale_tags:
+            click.echo(f"  {LLAMA_IMAGE}:{tag}")
+        if click.confirm(f"Remove {len(stale_tags)} image(s)?", default=False):
+            for tag in stale_tags:
+                subprocess.run(["docker", "image", "rm", f"{LLAMA_IMAGE}:{tag}"], check=False)
+                click.echo(f"Removed {LLAMA_IMAGE}:{tag}.")
         else:
-            click.echo("Skipping Ollama model removal.")
+            click.echo("Skipping image removal.")
     else:
-        click.echo("No orphaned Ollama models found.")
+        click.echo(f"No old {LLAMA_IMAGE} images found.")
 
 
 def main() -> None:

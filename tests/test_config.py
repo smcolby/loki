@@ -6,7 +6,9 @@ import pytest
 from pydantic import ValidationError
 
 from loki.config import (
+    DEFAULT_PRESET_SETTINGS,
     REPO_ROOT,
+    LlamaConfig,
     LokiConfig,
     PortsConfig,
     build_caddyfile,
@@ -15,6 +17,7 @@ from loki.config import (
     env_file_path,
     kiwix_dir,
     load_config,
+    models_preset_path,
 )
 
 
@@ -24,8 +27,6 @@ def test_load_config_parses_kiwix_files(tmp_path):
         kiwix_files:
           - name: wikipedia_en_test
             url: https://download.kiwix.org/zim/wikipedia/wikipedia_en_test.zim
-        ollama_models:
-          - llama3:8b
     """)
     config_file = tmp_path / "config.yaml"
     config_file.write_text(config_text)
@@ -37,32 +38,51 @@ def test_load_config_parses_kiwix_files(tmp_path):
     assert config.kiwix_files[0].url.endswith(".zim")
 
 
-def test_load_config_parses_ollama_models(tmp_path):
-    """load_config returns a LokiConfig with the correct ollama_models list."""
-    config_text = textwrap.dedent("""\
-        kiwix_files: []
-        ollama_models:
-          - llama3:8b
-          - qwen3:30b
+def test_load_config_parses_llama_section(tmp_path):
+    """load_config reads the llama image settings and replaces the default preset settings."""
+    config_text = textwrap.dedent(f"""\
+        llama:
+          models_dir: {tmp_path / "models"}
+          ref: deadbeef
+          gpu_targets: gfx1201
+          rocm_version: 7.2.4
+          max_loaded: 2
+          defaults:
+            n-gpu-layers: 40
+            jinja: true
     """)
     config_file = tmp_path / "config.yaml"
     config_file.write_text(config_text)
 
-    config = load_config(config_file)
+    llama = load_config(config_file).llama
 
-    assert config.ollama_models == ["llama3:8b", "qwen3:30b"]
+    assert llama.models_dir == tmp_path / "models"
+    assert (llama.ref, llama.gpu_targets, llama.max_loaded) == ("deadbeef", "gfx1201", 2)
+    assert llama.defaults == {"n-gpu-layers": 40, "jinja": True}
 
 
 def test_load_config_empty_lists(tmp_path):
-    """load_config handles configs with empty kiwix_files and ollama_models."""
-    config_text = "kiwix_files: []\nollama_models: []\n"
+    """load_config handles configs with an empty kiwix_files list."""
     config_file = tmp_path / "config.yaml"
-    config_file.write_text(config_text)
+    config_file.write_text("kiwix_files: []\n")
 
     config = load_config(config_file)
 
     assert config.kiwix_files == []
-    assert config.ollama_models == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["ollama_models:\n  - llama3:8b\n", "ports:\n  ollama: 11434\n", "llama:\n  model_dir: /x\n"],
+    ids=["ollama-models", "ollama-port", "misspelled-llama-key"],
+)
+def test_load_config_rejects_unknown_keys(tmp_path, text):
+    """load_config fails loudly on keys it does not understand, including retired Ollama keys."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(text)
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        load_config(config_file)
 
 
 def test_load_config_applies_defaults_for_missing_keys(tmp_path):
@@ -75,7 +95,8 @@ def test_load_config_applies_defaults_for_missing_keys(tmp_path):
     assert config.url == "loki.local"
     assert config.ports.caddy == 80
     assert config.ports.kiwix == 8080
-    assert config.ports.ollama == 11434
+    assert config.ports.llama == 8090
+    assert config.llama.defaults == DEFAULT_PRESET_SETTINGS
 
 
 def test_load_config_raises_on_invalid_port_type(tmp_path):
@@ -140,6 +161,37 @@ def test_loki_config_default_url_is_local_tld():
     assert LokiConfig().url.endswith(".local")
 
 
+def test_models_dir_expands_home(monkeypatch, tmp_path):
+    """A models_dir starting with ~ resolves against the user's home directory."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert LlamaConfig(models_dir="~/weights").models_dir == tmp_path / "weights"
+
+
+def test_default_models_dir_expands_home(monkeypatch, tmp_path):
+    """The default models_dir is expanded too, so the container mount path is absolute."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert LlamaConfig().models_dir == tmp_path / ".llms"
+
+
+def test_relative_models_dir_becomes_absolute(monkeypatch, tmp_path):
+    """A relative models_dir is anchored to the current directory."""
+    monkeypatch.chdir(tmp_path)
+    assert LlamaConfig(models_dir="models").models_dir == tmp_path / "models"
+
+
+def test_default_preset_settings_are_not_shared_between_configs():
+    """Mutating one config's defaults leaves new configs untouched."""
+    first = LlamaConfig()
+    first.defaults["n-gpu-layers"] = 1
+    assert LlamaConfig().defaults["n-gpu-layers"] == DEFAULT_PRESET_SETTINGS["n-gpu-layers"]
+
+
+def test_models_preset_path_is_under_loki_root(monkeypatch, tmp_path):
+    """models_preset_path returns models.ini inside the LOKI_ROOT directory."""
+    monkeypatch.setenv("LOKI_ROOT", str(tmp_path))
+    assert models_preset_path() == tmp_path / "models.ini"
+
+
 def test_caddyfile_path_is_under_loki_root(monkeypatch, tmp_path):
     """caddyfile_path returns the Caddyfile path inside the LOKI_ROOT directory."""
     monkeypatch.setenv("LOKI_ROOT", str(tmp_path))
@@ -151,7 +203,7 @@ def test_ports_config_defaults():
     ports = PortsConfig()
     assert ports.caddy == 80
     assert ports.kiwix == 8080
-    assert ports.ollama == 11434
+    assert ports.llama == 8090
 
 
 def test_ports_config_partial_override():
@@ -159,31 +211,50 @@ def test_ports_config_partial_override():
     ports = PortsConfig(kiwix=9090)
     assert ports.kiwix == 9090
     assert ports.caddy == 80
-    assert ports.ollama == 11434
+    assert ports.llama == 8090
 
 
 def test_ports_config_full_override():
     """PortsConfig accepts fully custom port values."""
-    ports = PortsConfig(caddy=8000, kiwix=9090, ollama=12000)
+    ports = PortsConfig(caddy=8000, kiwix=9090, llama=9000)
     assert ports.caddy == 8000
     assert ports.kiwix == 9090
-    assert ports.ollama == 12000
+    assert ports.llama == 9000
 
 
 def test_build_env_file_contains_all_ports():
-    """build_env_file returns content with CADDY_PORT, KIWIX_PORT, and OLLAMA_PORT."""
-    content = build_env_file(PortsConfig())
+    """build_env_file returns content with CADDY_PORT, KIWIX_PORT, and LLAMA_PORT."""
+    content = build_env_file(LokiConfig())
     assert "CADDY_PORT=80" in content
     assert "KIWIX_PORT=8080" in content
-    assert "OLLAMA_PORT=11434" in content
+    assert "LLAMA_PORT=8090" in content
 
 
 def test_build_env_file_uses_custom_ports():
     """build_env_file reflects custom port values."""
-    content = build_env_file(PortsConfig(caddy=8000, kiwix=9090, ollama=12000))
+    content = build_env_file(LokiConfig(ports=PortsConfig(caddy=8000, kiwix=9090, llama=9000)))
     assert "CADDY_PORT=8000" in content
     assert "KIWIX_PORT=9090" in content
-    assert "OLLAMA_PORT=12000" in content
+    assert "LLAMA_PORT=9000" in content
+
+
+def test_build_env_file_contains_llama_build_settings(tmp_path):
+    """build_env_file passes the models mount and image build arguments to Compose."""
+    llama = LlamaConfig(
+        models_dir=tmp_path,
+        ref="deadbeef",
+        gpu_targets="gfx1201",
+        rocm_version="7.2.4",
+        max_loaded=2,
+    )
+
+    lines = build_env_file(LokiConfig(llama=llama)).splitlines()
+
+    assert f"LLAMA_MODELS_DIR={tmp_path}" in lines
+    assert "LLAMA_CPP_REF=deadbeef" in lines
+    assert "LLAMA_GPU_TARGETS=gfx1201" in lines
+    assert "LLAMA_MAX_LOADED=2" in lines
+    assert "ROCM_VERSION=7.2.4" in lines
 
 
 def test_env_file_path_is_under_loki_root(monkeypatch, tmp_path):
