@@ -13,6 +13,7 @@ from loki.config import (
     avahi_pid_file,
     build_caddyfile,
     build_env_file,
+    build_strata_compose,
     caddyfile_path,
     env_file_path,
     gateway_dir,
@@ -22,6 +23,7 @@ from loki.config import (
     load_config,
     loki_root,
     models_preset_path,
+    strata_compose_path,
 )
 from loki.presets import PresetError, build_models_preset
 from loki.system import (
@@ -63,8 +65,19 @@ def _require_tool(name: str) -> None:
 
 
 def _compose(*args: str) -> list[str]:
-    """Return a ``docker compose`` command rooted at ``LOKI_ROOT``."""
-    return ["docker", "compose", "--project-directory", str(loki_root()), *args]
+    """Return a ``docker compose`` command over ``compose.yaml`` and the Strata services."""
+    root = loki_root()
+    return [
+        "docker",
+        "compose",
+        "--project-directory",
+        str(root),
+        "-f",
+        str(root / "compose.yaml"),
+        "-f",
+        str(strata_compose_path()),
+        *args,
+    ]
 
 
 def _images(config: LokiConfig) -> dict[str, str]:
@@ -72,32 +85,41 @@ def _images(config: LokiConfig) -> dict[str, str]:
     return image_names(config, gateway_tag(gateway_dir()))
 
 
-def _needed_services(config: LokiConfig) -> list[str]:
-    """Return the locally built services the configured stack runs."""
-    return ["gateway", *config.engine_services()]
+def _build_targets(config: LokiConfig) -> dict[str, str]:
+    """Return the Compose service that builds each locally built image the stack needs.
+
+    Every Strata engine runs the same image, so the first engine's service builds it.
+    """
+    targets = {"gateway": "gateway", "llama": "llama"}
+    strata = list(config.strata.services())
+    if strata:
+        targets["strata"] = strata[0]
+    return targets
 
 
 def _missing_services(config: LokiConfig) -> list[str]:
-    """Return the needed services whose image is not present locally."""
+    """Return the needed local images (``gateway``, ``llama``, ``strata``) not yet built."""
     images = _images(config)
     return [
-        service
-        for service in _needed_services(config)
+        key
+        for key in _build_targets(config)
         if subprocess.run(
-            ["docker", "image", "inspect", images[service]], capture_output=True, check=False
+            ["docker", "image", "inspect", images[key]], capture_output=True, check=False
         ).returncode
         != 0
     ]
 
 
-def _build_services(services: list[str]) -> bool:
-    """Build images for ``services`` through Compose.
+def _build_services(config: LokiConfig, keys: list[str]) -> bool:
+    """Build the local images named by ``keys`` through Compose.
 
     Returns
     -------
     bool
         ``True`` if ``docker compose build`` exited with code 0.
     """
+    targets = _build_targets(config)
+    services = [targets[key] for key in keys]
     return subprocess.run(_compose("build", *services), check=False).returncode == 0
 
 
@@ -107,7 +129,7 @@ def _api_url(config: LokiConfig) -> str:
 
 
 def _write_generated_files(config: LokiConfig) -> bool:
-    """Write the Caddyfile, ``.env``, and ``models.ini`` derived from ``config``.
+    """Write the Caddyfile, ``.env``, ``compose.strata.yaml``, and ``models.ini`` from ``config``.
 
     Parameters
     ----------
@@ -117,22 +139,26 @@ def _write_generated_files(config: LokiConfig) -> bool:
     Returns
     -------
     bool
-        ``True`` when every file was written, ``False`` when Strata is enabled
-        without its engine config or a model preset is invalid (the error is
-        printed and ``models.ini`` is left untouched).
+        ``True`` when every file was written, ``False`` when a Strata engine's
+        config is missing or a model preset is invalid (the error is printed
+        and ``models.ini`` is left untouched).
     """
-    # Require Strata's engine config, which Compose would otherwise fail to mount
-    strata_config = config.strata.config_file
-    if config.strata.enabled and not strata_config.is_file():
+    # Require each Strata engine config, which Compose would otherwise fail to mount
+    missing = [str(path) for path in config.strata.services().values() if not path.is_file()]
+    if missing:
         click.echo(
-            f"Error: strata.enabled is true but {strata_config} does not exist "
+            f"Error: Strata engine config not found: {', '.join(missing)} "
             "(see README for its format).",
             err=True,
         )
         return False
 
+    images = _images(config)
     caddyfile_path().write_text(build_caddyfile(config.url))
-    env_file_path().write_text(build_env_file(config, _images(config)))
+    env_file_path().write_text(build_env_file(config, images))
+    strata_compose_path().write_text(
+        build_strata_compose(config, images["strata"], loki_root() / "strata")
+    )
 
     # Collect every model preset under the models directory
     models_dir = config.llama.models_dir
@@ -204,9 +230,10 @@ def setup() -> None:
 
     Walks through config review, system-package installation (aria2,
     avahi-daemon, avahi-utils), Docker installation, an AMD GPU check, and the
-    ``LOKI_ROOT`` shell-profile export. Then writes the Caddyfile, ``.env``, and
-    ``models.ini``, offers to build any missing local images (gateway,
-    llama-server, and Strata when enabled), and downloads any ZIM files listed
+    ``LOKI_ROOT`` shell-profile export. Then writes the Caddyfile, ``.env``,
+    ``compose.strata.yaml``, and ``models.ini``, offers to build any missing
+    local images (gateway, llama-server, and Strata when it has engines), and
+    downloads any ZIM files listed
     in ``config.yaml``.
     """
     config_path = loki_root() / "config.yaml"
@@ -330,7 +357,7 @@ def setup() -> None:
             + "\n",
             default=True,
         ):
-            if _build_services(missing):
+            if _build_services(config, missing):
                 click.echo("Images built.")
             else:
                 click.echo("Warning: image build failed.", err=True)
@@ -397,9 +424,13 @@ def update() -> None:
             err=True,
         )
 
-    # Published Docker images
+    # Generated files first, since every Compose call reads compose.strata.yaml
     _require_tool("docker")
     config = load_config()
+    if not _write_generated_files(config):
+        return
+
+    # Published Docker images
     click.echo("\nPulling latest Docker images ...")
     pull = subprocess.run(_compose("pull", "--ignore-buildable"), check=False)
     if pull.returncode != 0:
@@ -407,13 +438,11 @@ def update() -> None:
         return
 
     # Locally built images, only where config.yaml names one not yet built
-    if not _write_generated_files(config):
-        return
     missing = _missing_services(config)
     if missing:
         images = _images(config)
         click.echo(f"\nBuilding {', '.join(images[service] for service in missing)} ...")
-        if not _build_services(missing):
+        if not _build_services(config, missing):
             click.echo("Warning: image build failed.", err=True)
             return
     else:
@@ -423,7 +452,7 @@ def update() -> None:
     result = subprocess.run(_compose("ps", "-q"), capture_output=True, text=True, check=False)
     if result.stdout.strip():
         click.echo("Restarting Docker Compose stack with updated images ...")
-        subprocess.run(_compose("up", "-d"), check=False)
+        subprocess.run(_compose("up", "-d", "--remove-orphans"), check=False)
     else:
         click.echo("Docker images updated. Start the stack with `loki start` when ready.")
 
@@ -440,7 +469,7 @@ def start() -> None:
 
     # Compose builds any missing local image before starting its service
     click.echo("Starting Docker Compose stack ...")
-    subprocess.run(_compose("up", "-d"), check=False)
+    subprocess.run(_compose("up", "-d", "--remove-orphans"), check=False)
     click.echo(f"Model API ({', '.join(config.engine_services())}): {_api_url(config)}")
 
     hostname = config.url
@@ -471,7 +500,7 @@ def stop() -> None:
     _require_tool("docker")
     stop_avahi_publish(avahi_pid_file())
     click.echo("Stopping Docker Compose stack ...")
-    subprocess.run(_compose("down"), check=False)
+    subprocess.run(_compose("down", "--remove-orphans"), check=False)
 
 
 @cli.command()

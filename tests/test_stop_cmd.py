@@ -6,7 +6,7 @@ from loki.cli import cli
 
 
 def test_stop_calls_docker_compose_down(mocker):
-    """The stop command invokes docker compose down via subprocess."""
+    """The stop command runs docker compose down, removing orphaned containers."""
     mock_run = mocker.patch("loki.cli.subprocess.run", autospec=True)
 
     CliRunner().invoke(cli, ["stop"])
@@ -14,7 +14,7 @@ def test_stop_calls_docker_compose_down(mocker):
     cmd = mock_run.call_args.args[0]
     assert cmd[:2] == ["docker", "compose"]
     assert "--project-directory" in cmd
-    assert cmd[-1] == "down"
+    assert cmd[-2:] == ["down", "--remove-orphans"]
     assert mock_run.call_args.kwargs == {"check": False}
 
 

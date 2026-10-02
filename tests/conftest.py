@@ -29,7 +29,7 @@ def _isolate_paths(mocker, monkeypatch, tmp_path):
     """Keep generated files and the default models directory inside ``tmp_path``.
 
     ``HOME`` points at an empty directory so a default ``~/.llms`` never reads
-    the developer's real models, and the three generated files land in
+    the developer's real models, and the four generated files land in
     ``tmp_path``. Tests can re-patch any of these paths.
     """
     home = tmp_path / "home"
@@ -37,6 +37,7 @@ def _isolate_paths(mocker, monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(home))
     mocker.patch("loki.cli.caddyfile_path", return_value=tmp_path / "Caddyfile")
     mocker.patch("loki.cli.env_file_path", return_value=tmp_path / ".env")
+    mocker.patch("loki.cli.strata_compose_path", return_value=tmp_path / "compose.strata.yaml")
     mocker.patch("loki.cli.models_preset_path", return_value=tmp_path / "models.ini")
 
 
@@ -98,6 +99,22 @@ def _stub_system(mocker):
     mocker.patch("loki.cli.get_local_ip", return_value="192.168.1.100")
     mocker.patch("loki.cli.start_avahi_publish")
     mocker.patch("loki.cli.stop_avahi_publish")
+
+
+@pytest.fixture
+def add_strata_engines(tmp_path):
+    """Return a helper that configures Strata engines with their engine configs on disk."""
+
+    def _add(config: LokiConfig, *names: str) -> Path:
+        data_dir = tmp_path / "strata"
+        data_dir.mkdir(exist_ok=True)
+        config.strata.data_dir = data_dir
+        config.strata.engines = {name: f"{name}.json" for name in names}
+        for name in names:
+            (data_dir / f"{name}.json").write_text("{}")
+        return data_dir
+
+    return _add
 
 
 @pytest.fixture

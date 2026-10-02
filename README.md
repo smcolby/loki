@@ -51,8 +51,8 @@ llama:
     flash-attn: "on"
 
 strata:
-  enabled: false                                    # Serve Strata's model too (see below).
-  data_dir: ~/.llms/strata                          # Holds strata.json and its model files.
+  engines: {}                                       # Engine name -> config file (see below).
+  data_dir: ~/.llms/strata                          # Holds the engine configs and model files.
   ref: 1678de333d0e0711bc414ad992b640e1a37dd814     # Strata commit to build.
   gpu_targets: gfx1100
   rocm_version: 7.10.0a20251120                     # TheRock ROCm wheels.
@@ -64,7 +64,7 @@ kiwix_files:
 
 `loki/config.default.yaml` lists the full default `llama.defaults` block. Keys under `defaults` are `llama-server` long option names without the leading dashes. Quote `"on"` and `"off"` so YAML keeps them as strings.
 
-Edit `kiwix_files` (datasets [here](https://download.kiwix.org/zim/)) to match what you want downloaded. `loki` generates the `Caddyfile`, `.env`, and `models.ini`; do not edit those files by hand.
+Edit `kiwix_files` (datasets [here](https://download.kiwix.org/zim/)) to match what you want downloaded. `loki` generates the `Caddyfile`, `.env`, `models.ini`, and `compose.strata.yaml`; do not edit those files by hand.
 
 ## Adding models
 
@@ -88,7 +88,16 @@ Relative `model`, `model-draft`, `mmproj`, and `chat-template-file` paths resolv
 
 ### Adding Strata
 
-Strata streams a mixture-of-experts model's experts from host memory, so it runs Qwen3.8-Flash-Next on a GPU too small to hold it. Set `strata.enabled: true` and put a `strata.json` in `strata.data_dir`:
+Strata streams a mixture-of-experts model's experts from host memory, so it runs Qwen3.8-Flash-Next and its fine-tunes on a GPU too small to hold them. Each entry under `strata.engines` maps an engine name to an engine config file in `strata.data_dir`:
+
+```yaml
+strata:
+  engines:
+    qwen: qwen.json
+    swift: swift.json
+```
+
+Each engine runs in its own container as Compose service `strata-<name>`, defined in the generated `compose.strata.yaml`. Engine names use lowercase letters, digits, `_`, and `-`. A config file looks like this:
 
 ```json
 {
@@ -99,7 +108,7 @@ Strata streams a mixture-of-experts model's experts from host memory, so it runs
 }
 ```
 
-`args` are Strata engine arguments, `model_name` is the model id clients request, and `env` (optional) sets engine environment variables. Use absolute paths inside `data_dir`, which is mounted read-only at the same path. The image supplies the engine binary, its libraries, and a hipBLASLt tuning table for `gpu_targets`, so `strata.json` must not set `exe`, `cwd`, `lib_dirs`, `backend`, or `log`. `loki start` stops with an error if Strata is enabled and `strata.json` is missing.
+`args` are Strata engine arguments, `model_name` is the model id clients request, and `env` (optional) sets engine environment variables. Use absolute paths inside `data_dir`, which is mounted read-only at the same path. The image supplies the engine binary, its libraries, and a hipBLASLt tuning table for `gpu_targets`, so an engine config must not set `exe`, `cwd`, `lib_dirs`, `backend`, or `log`. `loki start` stops with an error if a listed engine config is missing. All engines share one image, and an engine that is not loaded holds no GPU memory and little host RAM.
 
 Only one engine holds the GPU at a time. The first request for a model on the other engine waits for in-flight requests to finish, unloads the current engine's models, and then loads the requested one.
 
@@ -119,7 +128,7 @@ This will:
 4. **Check for AMD GPU devices** (`/dev/kfd` and `/dev/dri`) and warn if the `amdgpu` driver is missing.
 5. **Add `LOKI_ROOT` to your shell profile** so `loki` commands work from any directory.
 6. **Generate the `Caddyfile`, `.env`, and `models.ini`** from your configuration and model presets.
-7. **Build missing local images**: the API gateway, `llama-server` (10 to 20 minutes), and Strata when enabled.
+7. **Build missing local images**: the API gateway, `llama-server` (10 to 20 minutes), and Strata when any engine is configured.
 8. **Download ZIM files** listed in `kiwix_files` using aria2.
 
 Steps that change your system prompt `[Y/n]`. Skipped steps must be completed manually before the stack will function correctly; `loki start` builds any image step 7 skipped.

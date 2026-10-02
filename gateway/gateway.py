@@ -396,10 +396,13 @@ ENGINE_TYPES: dict[str, Callable[[str, str, ClientSession], Engine]] = {
 def parse_engines(spec: str, session: ClientSession) -> list[Engine]:
     """Build engines from ``name=url`` pairs separated by commas.
 
+    The engine type is the name up to its first hyphen, so ``strata`` and
+    ``strata-swift`` are both Strata engines with their own containers.
+
     Raises
     ------
     ValueError
-        If an entry is malformed or names an unknown engine type.
+        If an entry is malformed, repeats a name, or names an unknown engine type.
 
     Examples
     --------
@@ -414,9 +417,15 @@ def parse_engines(spec: str, session: ClientSession) -> list[Engine]:
         name, sep, url = entry.partition("=")
         if not sep or not url:
             raise ValueError(f"engine entry {entry!r} is not name=url")
-        if name not in ENGINE_TYPES:
-            raise ValueError(f"unknown engine {name!r}; expected one of {', '.join(ENGINE_TYPES)}")
-        engines.append(ENGINE_TYPES[name](name, url.rstrip("/"), session))
+        kind = name.partition("-")[0]
+        if kind not in ENGINE_TYPES:
+            expected = ", ".join(ENGINE_TYPES)
+            raise ValueError(
+                f"unknown engine type {kind!r} in {name!r}; expected one of {expected}"
+            )
+        if any(engine.name == name for engine in engines):
+            raise ValueError(f"engine {name!r} is listed twice")
+        engines.append(ENGINE_TYPES[kind](name, url.rstrip("/"), session))
     if not engines:
         raise ValueError("no engines configured")
     return engines

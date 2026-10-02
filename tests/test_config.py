@@ -3,6 +3,7 @@
 import textwrap
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
 from loki.config import (
@@ -14,6 +15,7 @@ from loki.config import (
     StrataConfig,
     build_caddyfile,
     build_env_file,
+    build_strata_compose,
     caddyfile_path,
     env_file_path,
     gateway_tag,
@@ -21,6 +23,7 @@ from loki.config import (
     kiwix_dir,
     load_config,
     models_preset_path,
+    strata_compose_path,
 )
 
 
@@ -105,7 +108,7 @@ def test_load_config_applies_defaults_for_missing_keys(tmp_path):
     assert config.ports.kiwix == 8080
     assert config.ports.api == 8090
     assert config.llama.defaults == DEFAULT_PRESET_SETTINGS
-    assert config.strata.enabled is False
+    assert config.strata.engines == {}
     assert config.engine_services() == ["llama"]
 
 
@@ -274,28 +277,73 @@ def test_build_env_file_contains_llama_build_settings(tmp_path):
 
 
 def test_build_env_file_without_strata_routes_only_llama():
-    """With Strata disabled, no Compose profile is active and the gateway sees only llama."""
+    """Without Strata engines, the gateway sees only llama."""
     lines = build_env_file(LokiConfig(), IMAGES).splitlines()
 
-    assert "COMPOSE_PROFILES=" in lines
     assert "LOKI_ENGINES=llama=http://llama:8080" in lines
 
 
-def test_build_env_file_with_strata_enables_profile_and_engine(tmp_path):
-    """With Strata enabled, its profile runs and the gateway routes to both engines."""
-    strata = StrataConfig(
-        enabled=True, data_dir=tmp_path, ref="cafe", gpu_targets="gfx1100", rocm_version="7.10"
-    )
+def test_build_env_file_routes_every_strata_engine(tmp_path):
+    """Each Strata engine is routed under its service name, in config order."""
+    strata = StrataConfig(engines={"qwen": "qwen.json", "swift": "swift.json"}, data_dir=tmp_path)
 
     lines = build_env_file(LokiConfig(strata=strata), IMAGES).splitlines()
 
-    assert "COMPOSE_PROFILES=strata" in lines
-    assert "LOKI_ENGINES=llama=http://llama:8080,strata=http://strata:8080" in lines
-    assert "STRATA_IMAGE=loki-strata:y" in lines
-    assert f"STRATA_DATA_DIR={tmp_path}" in lines
-    assert "STRATA_REF=cafe" in lines
-    assert "STRATA_GPU_TARGETS=gfx1100" in lines
-    assert "STRATA_ROCM_VERSION=7.10" in lines
+    assert (
+        "LOKI_ENGINES=llama=http://llama:8080,"
+        "strata-qwen=http://strata-qwen:8080,strata-swift=http://strata-swift:8080"
+    ) in lines
+
+
+def test_build_strata_compose_runs_one_container_per_engine(tmp_path):
+    """Each engine gets a service on the shared image that mounts its own engine config."""
+    strata = StrataConfig(
+        engines={"qwen": "qwen.json", "swift": "configs/swift.json"},
+        data_dir=tmp_path,
+        ref="cafe",
+        gpu_targets="gfx1100",
+        rocm_version="7.10",
+    )
+
+    text = build_strata_compose(LokiConfig(strata=strata), "loki-strata:y", tmp_path / "ctx")
+    services = yaml.safe_load(text)["services"]
+
+    assert list(services) == ["strata-qwen", "strata-swift"]
+    swift = services["strata-swift"]
+    assert swift["image"] == "loki-strata:y"
+    assert swift["container_name"] == "loki-strata-swift"
+    assert swift["build"] == {
+        "context": str(tmp_path / "ctx"),
+        "args": {"STRATA_REF": "cafe", "GPU_TARGETS": "gfx1100", "ROCM_VERSION": "7.10"},
+    }
+    assert swift["volumes"][0] == f"{tmp_path}:{tmp_path}:ro"
+    assert swift["volumes"][1]["source"] == str(tmp_path / "configs" / "swift.json")
+    assert swift["volumes"][1]["target"] == "/etc/strata/strata.json"
+    assert swift["networks"] == ["loki-net"]
+    assert "&" not in text
+
+
+def test_build_strata_compose_without_engines_has_no_services():
+    """Without Strata engines the file still parses, with no services."""
+    text = build_strata_compose(LokiConfig(), "loki-strata:y", REPO_ROOT / "strata")
+
+    assert yaml.safe_load(text) == {"services": {}}
+
+
+@pytest.mark.parametrize(
+    ("engines", "message"),
+    [
+        ({"Qwen": "q.json"}, "lowercase"),
+        ({"-qwen": "q.json"}, "lowercase"),
+        ({"qwen": "/abs/q.json"}, "relative to data_dir"),
+        ({"qwen": "../q.json"}, "relative to data_dir"),
+    ],
+    ids=["uppercase", "leading-hyphen", "absolute", "parent"],
+)
+def test_strata_rejects_bad_engines(engines, message):
+    """Engine names must fit a Compose service name and configs must stay in data_dir."""
+    with pytest.raises(ValidationError, match=message):
+        StrataConfig(engines=engines)
 
 
 def test_image_names_carry_every_build_input():
@@ -330,14 +378,20 @@ def test_gateway_tag_fails_on_missing_source(tmp_path):
 
 
 def test_strata_data_dir_expands_home(monkeypatch, tmp_path):
-    """The default Strata data_dir is absolute, and strata.json sits inside it."""
+    """The default Strata data_dir is absolute, and engine configs resolve inside it."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    strata = StrataConfig()
+    strata = StrataConfig(engines={"qwen": "qwen.json"})
     assert strata.data_dir == tmp_path / ".llms" / "strata"
-    assert strata.config_file == tmp_path / ".llms" / "strata" / "strata.json"
+    assert strata.services() == {"strata-qwen": tmp_path / ".llms" / "strata" / "qwen.json"}
 
 
 def test_env_file_path_is_under_loki_root(monkeypatch, tmp_path):
     """env_file_path returns the .env path inside the LOKI_ROOT directory."""
     monkeypatch.setenv("LOKI_ROOT", str(tmp_path))
     assert env_file_path() == tmp_path / ".env"
+
+
+def test_strata_compose_path_is_under_loki_root(monkeypatch, tmp_path):
+    """strata_compose_path returns the generated Compose file inside LOKI_ROOT."""
+    monkeypatch.setenv("LOKI_ROOT", str(tmp_path))
+    assert strata_compose_path() == tmp_path / "compose.strata.yaml"

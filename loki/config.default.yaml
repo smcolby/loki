@@ -30,11 +30,16 @@ llama:
     cache-ram: 8192      # MiB of host RAM for reusable prompt prefixes
     ctx-checkpoints: 32
 
-# Strata runs one model (Qwen3.8-Flash-Next) behind the same API. Only one engine
-# holds the GPU at a time: the gateway unloads the other before switching.
+# Strata serves mixture-of-experts models (Qwen3.8-Flash-Next and its fine-tunes)
+# behind the same API, one container per engine. Only one engine holds the GPU at
+# a time: the gateway unloads the others before switching.
 strata:
-  enabled: false
-  # Holds strata.json (engine args, tokenizer, model name) and the files it names (see README).
+  # Engine name -> engine config in data_dir (see README); empty leaves Strata out.
+  # Each runs as Compose service strata-<name>, for example:
+  #   qwen: qwen.json
+  #   swift: swift.json
+  engines: {}
+  # Holds the engine configs (engine args, tokenizer, model name) and the files they name.
   data_dir: ~/.llms/strata
   ref: 1678de333d0e0711bc414ad992b640e1a37dd814  # Strata commit to build
   gpu_targets: gfx1100            # AMD GPU architecture (rocminfo | grep gfx)

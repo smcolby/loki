@@ -37,14 +37,16 @@ def test_missing_services_empty_when_all_present(mocker, sample_config, gateway_
     assert _missing_services(sample_config) == []
 
 
-def test_missing_services_includes_strata_only_when_enabled(mocker, sample_config):
-    """Strata's image is checked only when Strata is enabled."""
+def test_missing_services_includes_strata_only_with_engines(
+    mocker, sample_config, add_strata_engines
+):
+    """Strata's image is checked only when Strata has engines, and once for all of them."""
     mock_run = _inspect(mocker, set())
 
     assert _missing_services(sample_config) == ["gateway", "llama"]
     assert all(call.args[0][3] != STRATA for call in mock_run.call_args_list)
 
-    sample_config.strata.enabled = True
+    add_strata_engines(sample_config, "qwen", "swift")
     assert _missing_services(sample_config) == ["gateway", "llama", "strata"]
 
 
@@ -56,19 +58,22 @@ def test_missing_services_follows_gateway_source(mocker, sample_config, gateway_
     assert _missing_services(sample_config) == ["gateway"]
 
 
-def test_build_services_runs_compose_build(mocker):
-    """Building runs one ``docker compose build`` for the listed services."""
+def test_build_services_builds_strata_through_its_first_engine(
+    mocker, sample_config, add_strata_engines
+):
+    """The shared Strata image is built once, through the first engine's service."""
+    add_strata_engines(sample_config, "qwen", "swift")
     mock_run = mocker.patch(
         "loki.cli.subprocess.run",
         autospec=True,
         return_value=subprocess.CompletedProcess(args=[], returncode=0),
     )
 
-    assert _build_services(["gateway", "strata"]) is True
-    assert mock_run.call_args.args[0][-3:] == ["build", "gateway", "strata"]
+    assert _build_services(sample_config, ["gateway", "strata"]) is True
+    assert mock_run.call_args.args[0][-3:] == ["build", "gateway", "strata-qwen"]
 
 
-def test_build_services_reports_failure(mocker):
+def test_build_services_reports_failure(mocker, sample_config):
     """A non-zero build exit is reported as failure."""
     mocker.patch(
         "loki.cli.subprocess.run",
@@ -76,4 +81,4 @@ def test_build_services_reports_failure(mocker):
         return_value=subprocess.CompletedProcess(args=[], returncode=1),
     )
 
-    assert _build_services(["llama"]) is False
+    assert _build_services(sample_config, ["llama"]) is False

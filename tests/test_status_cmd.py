@@ -250,14 +250,14 @@ def test_status_skips_docker_when_not_installed(mocker, sample_config):
     assert "not installed" in result.output
 
 
-def test_status_checks_strata_container_when_enabled(mocker, sample_config):
-    """The status command checks the Strata container only when Strata is enabled."""
-    sample_config.strata.enabled = True
+def test_status_checks_each_strata_container(mocker, sample_config, add_strata_engines):
+    """The status command checks one container per configured Strata engine."""
+    add_strata_engines(sample_config, "qwen", "swift")
     mocker.patch("loki.cli.load_config", return_value=sample_config)
     mocker.patch("loki.cli.requests.get", autospec=True, return_value=_response(mocker))
-    mock_run = _mock_subprocess_not_found(mocker)
+    _mock_subprocess_not_found(mocker)
 
     result = CliRunner().invoke(cli, ["status"])
 
-    assert any(call.args[0][-1] == "loki-strata" for call in mock_run.call_args_list)
-    assert "loki-strata: NOT FOUND" in result.output
+    assert "loki-strata-qwen: NOT FOUND" in result.output
+    assert "loki-strata-swift: NOT FOUND" in result.output

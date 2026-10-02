@@ -1,5 +1,6 @@
 """Tests for the start subcommand: generated files, compose up, and mDNS."""
 
+import yaml
 from click.testing import CliRunner
 
 from loki.cli import cli
@@ -7,14 +8,17 @@ from loki.config import LokiConfig
 
 
 def test_start_runs_compose_up(mocker, sample_config):
-    """The start command brings the compose stack up detached."""
+    """The start command brings the compose stack up detached, removing orphaned containers."""
     mocker.patch("loki.cli.load_config", return_value=sample_config)
     mock_run = mocker.patch("loki.cli.subprocess.run", autospec=True)
 
     CliRunner().invoke(cli, ["start"])
 
     commands = [call.args[0] for call in mock_run.call_args_list]
-    assert any(cmd[:2] == ["docker", "compose"] and cmd[-2:] == ["up", "-d"] for cmd in commands)
+    assert any(
+        cmd[:2] == ["docker", "compose"] and cmd[-3:] == ["up", "-d", "--remove-orphans"]
+        for cmd in commands
+    )
 
 
 def test_start_writes_models_preset(mocker, sample_config, tmp_path, write_preset):
@@ -69,35 +73,50 @@ def test_start_prints_api_url_with_engines(mocker, sample_config):
     assert "Model API (llama): http://loki.local:8090/v1" in result.output
 
 
-def test_start_enables_strata_profile(mocker, sample_config, tmp_path):
-    """With Strata enabled and configured, .env selects its profile and routes it."""
-    sample_config.strata.enabled = True
-    sample_config.strata.data_dir = tmp_path / "strata"
-    sample_config.strata.data_dir.mkdir()
-    sample_config.strata.config_file.write_text("{}")
+def test_start_writes_strata_services_and_routes(
+    mocker, sample_config, tmp_path, add_strata_engines
+):
+    """With Strata engines configured, start writes their services and routes each one."""
+    add_strata_engines(sample_config, "qwen", "swift")
     mocker.patch("loki.cli.load_config", return_value=sample_config)
 
     result = CliRunner().invoke(cli, ["start"])
 
     env = (tmp_path / ".env").read_text()
-    assert "COMPOSE_PROFILES=strata\n" in env
-    assert "LOKI_ENGINES=llama=http://llama:8080,strata=http://strata:8080\n" in env
-    assert "Model API (llama, strata)" in result.output
+    assert "strata-qwen=http://strata-qwen:8080,strata-swift=http://strata-swift:8080\n" in env
+    services = yaml.safe_load((tmp_path / "compose.strata.yaml").read_text())["services"]
+    assert list(services) == ["strata-qwen", "strata-swift"]
+    assert "Model API (llama, strata-qwen, strata-swift)" in result.output
 
 
-def test_start_aborts_when_strata_config_missing(mocker, sample_config, tmp_path):
-    """With Strata enabled but no strata.json, start exits before writing files or starting."""
-    sample_config.strata.enabled = True
-    sample_config.strata.data_dir = tmp_path / "strata"
+def test_start_aborts_when_strata_config_missing(
+    mocker, sample_config, tmp_path, add_strata_engines
+):
+    """A configured engine without its engine config stops start before writing or starting."""
+    data_dir = add_strata_engines(sample_config, "qwen", "swift")
+    (data_dir / "swift.json").unlink()
     mocker.patch("loki.cli.load_config", return_value=sample_config)
     mock_run = mocker.patch("loki.cli.subprocess.run", autospec=True)
 
     result = CliRunner().invoke(cli, ["start"])
 
     assert result.exit_code != 0
-    assert f"{tmp_path / 'strata' / 'strata.json'} does not exist" in result.output
+    assert f"Strata engine config not found: {data_dir / 'swift.json'}" in result.output
     mock_run.assert_not_called()
     assert not (tmp_path / ".env").exists()
+
+
+def test_start_uses_both_compose_files(mocker, sample_config, tmp_path):
+    """Every Compose call reads compose.yaml and the generated Strata file."""
+    mocker.patch("loki.cli.load_config", return_value=sample_config)
+    mocker.patch("loki.cli.loki_root", return_value=tmp_path)
+    mock_run = mocker.patch("loki.cli.subprocess.run", autospec=True)
+
+    CliRunner().invoke(cli, ["start"])
+
+    cmd = mock_run.call_args_list[0].args[0]
+    files = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "-f"]
+    assert files == [str(tmp_path / "compose.yaml"), str(tmp_path / "compose.strata.yaml")]
 
 
 def test_start_exits_when_docker_not_found(mocker, sample_config):

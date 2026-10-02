@@ -102,23 +102,24 @@ def test_update_skips_build_when_images_current(mocker):
     assert "Local images are current." in result.output
 
 
-def test_update_writes_generated_files_before_build(mocker, tmp_path, missing_services):
-    """Update refreshes .env so the build sees the configured commit."""
+def test_update_writes_generated_files_before_compose(mocker, tmp_path, missing_services):
+    """Update refreshes .env and compose.strata.yaml before its first Compose call."""
     mocker.patch("loki.cli.upgrade_packages", return_value=True)
     missing_services.return_value = ["llama"]
     seen = []
 
     def _record(cmd, *_, **__):
-        if "build" in cmd:
-            seen.append((tmp_path / ".env").read_text())
+        if cmd[:2] == ["docker", "compose"]:
+            seen.append(
+                ((tmp_path / ".env").is_file(), (tmp_path / "compose.strata.yaml").is_file())
+            )
         return _completed()
 
     mocker.patch("loki.cli.subprocess.run", side_effect=_record)
 
     CliRunner().invoke(cli, ["update"])
 
-    assert seen
-    assert "LLAMA_CPP_REF=abc123" in seen[0]
+    assert seen[0] == (True, True)
 
 
 def test_update_warns_and_returns_early_on_pull_failure(mocker):
@@ -151,7 +152,7 @@ def test_update_stops_on_build_failure(mocker, missing_services):
 
 
 def test_update_stops_on_invalid_preset(mocker, sample_config, write_preset):
-    """Update does not build or restart when a model preset is invalid."""
+    """Update does not pull, build, or restart when a model preset is invalid."""
     mocker.patch("loki.cli.upgrade_packages", return_value=True)
     write_preset(sample_config.llama.models_dir, "broken", "[broken]\nmodel = gone.gguf\n")
     mock_run = mocker.patch("loki.cli.subprocess.run", autospec=True, return_value=_completed())
@@ -159,7 +160,7 @@ def test_update_stops_on_invalid_preset(mocker, sample_config, write_preset):
     result = CliRunner().invoke(cli, ["update"])
 
     assert "invalid model preset" in result.output
-    assert len(mock_run.call_args_list) == 1
+    mock_run.assert_not_called()
 
 
 def test_update_restarts_stack_when_running(mocker):
@@ -177,7 +178,7 @@ def test_update_restarts_stack_when_running(mocker):
 
     result = CliRunner().invoke(cli, ["update"])
 
-    assert mock_run.call_args_list[-1].args[0][-2:] == ["up", "-d"]
+    assert mock_run.call_args_list[-1].args[0][-3:] == ["up", "-d", "--remove-orphans"]
     assert "Restarting Docker Compose stack" in result.output
 
 
@@ -195,7 +196,7 @@ def test_update_skips_restart_when_stack_not_running(mocker):
 
     result = CliRunner().invoke(cli, ["update"])
 
-    assert not any(call.args[0][-2:] == ["up", "-d"] for call in mock_run.call_args_list)
+    assert not any("up" in call.args[0] for call in mock_run.call_args_list)
     assert "loki start" in result.output
 
 

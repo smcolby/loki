@@ -157,6 +157,19 @@ async def test_switching_engines_unloads_the_other_first(client, llama, strata):
     assert strata.calls == ["chat:flash", "unload"]
 
 
+async def test_two_strata_engines_swap_like_any_other(make_client, strata):
+    """A hyphenated name is a second engine of the prefix's type with its own GPU turn."""
+    swift = FakeEngine(["swift"])
+    client = await make_client(**{"strata": strata, "strata-swift": swift})
+
+    await _complete(client, "flash")
+    await _complete(client, "swift")
+
+    assert strata.calls == ["chat:flash", "unload"]
+    assert swift.calls == ["chat:swift"]
+    assert (await (await client.get("/health")).json())["active"] == "strata-swift"
+
+
 async def test_same_engine_requests_do_not_unload(client, llama):
     """Consecutive requests to one engine leave model swaps to that engine's router."""
     for model in ("qwen", "gemma", "qwen"):
@@ -270,9 +283,11 @@ async def test_health_reports_engine_states(client):
     [
         ("", "no engines configured"),
         ("llama", "is not name=url"),
-        ("vllm=http://x", "unknown engine"),
+        ("vllm=http://x", "unknown engine type 'vllm'"),
+        ("vllm-strata=http://x", "unknown engine type 'vllm'"),
+        ("strata=http://a,strata=http://b", "listed twice"),
     ],
-    ids=["empty", "no-url", "unknown-kind"],
+    ids=["empty", "no-url", "unknown-kind", "unknown-prefix", "duplicate"],
 )
 async def test_parse_engines_rejects_bad_spec(spec, message):
     """Malformed LOKI_ENGINES values raise ValueError naming the problem."""

@@ -1,3 +1,5 @@
+# Strata engines come from compose.strata.yaml, which loki generates from config.yaml
+# and passes alongside this file.
 services:
   gateway:
     # One API for every engine: merges model lists and hands the GPU to one engine at a time.
@@ -46,39 +48,6 @@ services:
       - 0.0.0.0
       - --port
       - "8080"
-    networks:
-      - loki-net
-
-  strata:
-    # Optional; enabled by `strata.enabled` in config.yaml through COMPOSE_PROFILES.
-    profiles:
-      - strata
-    build:
-      context: ./strata
-      args:
-        STRATA_REF: ${STRATA_REF:-}
-        GPU_TARGETS: ${STRATA_GPU_TARGETS:-gfx1100}
-        ROCM_VERSION: ${STRATA_ROCM_VERSION:-}
-    image: ${STRATA_IMAGE:?run loki start to write .env}
-    container_name: loki-strata
-    restart: unless-stopped
-    devices:
-      - /dev/kfd
-      - /dev/dri
-    security_opt:
-      - seccomp=unconfined
-    # Strata pins host memory for expert streaming.
-    ulimits:
-      memlock: -1
-    volumes:
-      # Mount model data at its host path so strata.json paths resolve unchanged.
-      - ${STRATA_DATA_DIR:-./strata-data}:${STRATA_DATA_DIR:-/strata-data}:ro
-      - type: bind
-        source: ${STRATA_DATA_DIR:-./strata-data}/strata.json
-        target: /etc/strata/strata.json
-        read_only: true
-        bind:
-          create_host_path: false
     networks:
       - loki-net
 
