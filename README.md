@@ -2,7 +2,7 @@
 
 # `loki`: local offline knowledge index
 
-`loki` is a self-hosted AI stack that gives you a private, fully offline knowledge base powered by a local LLM. It combines [llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server` (local inference), [Open WebUI](https://openwebui.com) (chat interface), and [Kiwix](https://kiwix.org) (offline Wikipedia and other knowledge archives), all orchestrated with Docker Compose and managed through a single CLI.
+`loki` is a self-hosted AI stack that gives you a private, fully offline knowledge base powered by a local LLM. It combines [llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server` (local inference), [Open WebUI](https://openwebui.com) (chat interface), and [Kiwix](https://kiwix.org) (offline Wikipedia and other knowledge archives), all orchestrated with Docker Compose and managed through a single CLI. An optional second engine, [Strata](https://github.com/Niko1221/Strata), serves Qwen3.8-Flash-Next behind the same API.
 
 Whether you're working air-gapped, want to keep queries off the cloud, or just want an always-available research assistant, `loki` runs entirely on your own hardware with no external dependencies at runtime.
 
@@ -38,7 +38,7 @@ url: loki.local              # Hostname used to reach the server on your local n
 ports:
   caddy: 80      # Caddy reverse proxy (Open WebUI).
   kiwix: 8080    # Kiwix offline knowledge server.
-  llama: 8090    # llama-server OpenAI-compatible API.
+  api: 8090      # Model API for every engine (OpenAI and Anthropic compatible).
 
 llama:
   models_dir: ~/.llms                               # One subdirectory per model.
@@ -49,6 +49,13 @@ llama:
   defaults:                                         # Options every model gets.
     n-gpu-layers: 99
     flash-attn: "on"
+
+strata:
+  enabled: false                                    # Serve Strata's model too (see below).
+  data_dir: ~/.llms/strata                          # Holds strata.json and its model files.
+  ref: 1678de333d0e0711bc414ad992b640e1a37dd814     # Strata commit to build.
+  gpu_targets: gfx1100
+  rocm_version: 7.10.0a20251120                     # TheRock ROCm wheels.
 
 kiwix_files:
   - name: wikipedia_en_all_nopic
@@ -79,6 +86,23 @@ Relative `model`, `model-draft`, `mmproj`, and `chat-template-file` paths resolv
 
 `llama-server` loads a model on its first request and unloads the least recently used one when more than `max_loaded` would be resident. With `fit: "off"`, a preset whose context does not fit in VRAM fails to load with an error instead of silently shrinking.
 
+### Adding Strata
+
+Strata streams a mixture-of-experts model's experts from host memory, so it runs Qwen3.8-Flash-Next on a GPU too small to hold it. Set `strata.enabled: true` and put a `strata.json` in `strata.data_dir`:
+
+```json
+{
+  "args": ["--pack", "/home/you/.llms/strata/packs/iq2_xs", "--native", "/home/you/.llms/strata/models/model-00001-of-00002.gguf", "--max-context", "131072"],
+  "tokenizer": "/home/you/.llms/strata/packs/iq2_xs/tokenizer",
+  "model_name": "qwen3.8-flash-next-iq2_xs",
+  "env": {"STRATA_RESIDENT_PIN": "0"}
+}
+```
+
+`args` are Strata engine arguments, `model_name` is the model id clients request, and `env` (optional) sets engine environment variables. Use absolute paths inside `data_dir`, which is mounted read-only at the same path. The image supplies the engine binary, its libraries, and a hipBLASLt tuning table for `gpu_targets`, so `strata.json` must not set `exe`, `cwd`, `lib_dirs`, `backend`, or `log`. `loki start` stops with an error if Strata is enabled and `strata.json` is missing.
+
+Only one engine holds the GPU at a time. The first request for a model on the other engine waits for in-flight requests to finish, unloads the current engine's models, and then loads the requested one.
+
 ## Setup
 
 Run once after configuring:
@@ -95,10 +119,10 @@ This will:
 4. **Check for AMD GPU devices** (`/dev/kfd` and `/dev/dri`) and warn if the `amdgpu` driver is missing.
 5. **Add `LOKI_ROOT` to your shell profile** so `loki` commands work from any directory.
 6. **Generate the `Caddyfile`, `.env`, and `models.ini`** from your configuration and model presets.
-7. **Build the `llama-server` image** (`loki-llama:<gpu_targets>-<ref>`) for your GPU, which takes 10 to 20 minutes.
+7. **Build missing local images**: the API gateway, `llama-server` (10 to 20 minutes), and Strata when enabled.
 8. **Download ZIM files** listed in `kiwix_files` using aria2.
 
-Steps that change your system prompt `[Y/n]`. Skipped steps must be completed manually before the stack will function correctly; `loki start` builds the image if step 7 was skipped.
+Steps that change your system prompt `[Y/n]`. Skipped steps must be completed manually before the stack will function correctly; `loki start` builds any image step 7 skipped.
 
 ## Usage
 
@@ -106,20 +130,21 @@ Steps that change your system prompt `[Y/n]`. Skipped steps must be completed ma
 loki start    Write generated files, start the Docker Compose stack, and broadcast hostname via mDNS.
 loki stop     Stop the Docker Compose stack and terminate the mDNS broadcast.
 loki status   Check the health of running services and list model load states.
-loki update   Upgrade system packages, pull Docker images, and rebuild the llama-server image.
-loki cleanup  Remove ZIM files and llama-server images no longer matching config.
+loki update   Upgrade system packages, pull Docker images, and build missing local images.
+loki cleanup  Remove ZIM files and local images no longer matching config.
 ```
 
 After `loki start`, Open WebUI is available at `http://loki.local` (or whichever `url` you configured).
 
-To pick up a new llama.cpp release, set `llama.ref` to the new commit and run `loki update`. `loki cleanup` then offers to remove the image built for the previous commit.
+Local image tags name every build input: `loki-llama:<gpu_targets>-rocm<rocm_version>-<ref>`, `loki-strata:<gpu_targets>-rocm<rocm_version>-<ref>`, and `loki-gateway:<hash of the gateway sources>`. `loki update` builds only images whose tag is missing, so an unchanged config rebuilds nothing. To pick up a new llama.cpp release, set `llama.ref` to the new commit and run `loki update`. `loki cleanup` then offers to remove the image built for the previous commit.
 
 ## Connecting other clients
 
-`llama-server` listens on the LAN at `http://loki.local:8090` without an API key. It exposes:
+A gateway listens on the LAN at `http://loki.local:8090` without an API key and routes each request to the engine serving the requested model. It exposes:
 
-- An OpenAI-compatible API at `/v1` (`/v1/chat/completions`, `/v1/models`). Clients that require a key accept any placeholder value.
+- An OpenAI-compatible API at `/v1` (`/v1/chat/completions`, `/v1/models`). `/v1/models` lists every engine's models, with the engine in `owned_by`. Clients that require a key accept any placeholder value.
 - An Anthropic-compatible `/v1/messages` endpoint, so Claude Code can use it by setting `ANTHROPIC_BASE_URL=http://loki.local:8090`.
+- `/health`, which reports each engine's state and which one holds the GPU.
 
 Request reasoning depth with the OpenAI `reasoning_effort` field. A chat template may reject effort levels its model does not support; the request then fails with an error rather than running at a different level.
 
@@ -166,7 +191,7 @@ loki setup
 
 ### Building for a different GPU
 
-Set `llama.gpu_targets` to your GPU's architecture (`rocminfo | grep gfx`, for example `gfx1201`) and run `loki update`. The image keeps only the ROCm BLAS kernels for that architecture, so it holds a single target.
+Set `llama.gpu_targets` (and `strata.gpu_targets`) to your GPU's architecture (`rocminfo | grep gfx`, for example `gfx1201`) and run `loki update`. Each image keeps only the ROCm BLAS kernels for that architecture, so it holds a single target.
 
 ---
 
