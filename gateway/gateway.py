@@ -279,6 +279,7 @@ class Gateway:
     arbiter: Arbiter = field(init=False)
     _owners: dict[str, Engine] = field(default_factory=dict)
     _listed: list[dict[str, Any]] = field(default_factory=list)
+    _known: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     _refreshed: float = float("-inf")
 
     def __post_init__(self) -> None:
@@ -286,7 +287,12 @@ class Gateway:
         self.arbiter = Arbiter(self.engines)
 
     async def refresh(self) -> list[dict[str, Any]]:
-        """Rebuild the merged model list, skipping unreachable engines.
+        """Rebuild the merged model list from each engine's latest listing.
+
+        An engine that lists no models or cannot be reached keeps its last
+        non-empty listing, since Strata lists nothing while it loads a model
+        and an engine restart briefly refuses connections. An engine that has
+        never listed a model is left out.
 
         Raises
         ------
@@ -299,8 +305,13 @@ class Gateway:
             try:
                 models = await engine.models()
             except EngineError as exc:
-                log.warning("skipping %s in the model list: %s", engine.name, exc)
-                continue
+                log.warning("%s did not list its models: %s", engine.name, exc)
+                models = []
+
+            # Fall back to the engine's last non-empty listing
+            if models:
+                self._known[engine.name] = models
+            models = self._known.get(engine.name, [])
             for model in models:
                 if model["id"] in owners:
                     raise EngineError(
