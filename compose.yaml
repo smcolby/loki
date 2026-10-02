@@ -1,4 +1,20 @@
 services:
+  gateway:
+    # One API for every engine: merges model lists and hands the GPU to one engine at a time.
+    build:
+      context: ./gateway
+    image: ${GATEWAY_IMAGE:?run loki start to write .env}
+    container_name: loki-gateway
+    restart: unless-stopped
+    environment:
+      - LOKI_ENGINES=${LOKI_ENGINES:?run loki start to write .env}
+    ports:
+      - "${API_PORT:-8090}:8080"
+    depends_on:
+      - llama
+    networks:
+      - loki-net
+
   llama:
     # Built locally for one GPU architecture from a pinned llama.cpp commit.
     build:
@@ -6,8 +22,8 @@ services:
       args:
         LLAMA_CPP_REF: ${LLAMA_CPP_REF:-}
         GPU_TARGETS: ${LLAMA_GPU_TARGETS:-gfx1100}
-        ROCM_VERSION: ${ROCM_VERSION:-7.2.4}
-    image: loki-llama:${LLAMA_GPU_TARGETS:-gfx1100}-${LLAMA_CPP_REF:-unset}
+        ROCM_VERSION: ${LLAMA_ROCM_VERSION:-7.2.4}
+    image: ${LLAMA_IMAGE:?run loki start to write .env}
     container_name: loki-llama
     restart: unless-stopped
     # Pass the AMD GPU through to the ROCm runtime.
@@ -16,8 +32,6 @@ services:
       - /dev/dri
     security_opt:
       - seccomp=unconfined
-    ports:
-      - "${LLAMA_PORT:-8090}:8080"
     volumes:
       # Mount models at their host path so preset paths resolve unchanged.
       - ${LLAMA_MODELS_DIR:-./models}:${LLAMA_MODELS_DIR:-/models}:ro
@@ -35,18 +49,51 @@ services:
     networks:
       - loki-net
 
+  strata:
+    # Optional; enabled by `strata.enabled` in config.yaml through COMPOSE_PROFILES.
+    profiles:
+      - strata
+    build:
+      context: ./strata
+      args:
+        STRATA_REF: ${STRATA_REF:-}
+        GPU_TARGETS: ${STRATA_GPU_TARGETS:-gfx1100}
+        ROCM_VERSION: ${STRATA_ROCM_VERSION:-}
+    image: ${STRATA_IMAGE:?run loki start to write .env}
+    container_name: loki-strata
+    restart: unless-stopped
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    security_opt:
+      - seccomp=unconfined
+    # Strata pins host memory for expert streaming.
+    ulimits:
+      memlock: -1
+    volumes:
+      # Mount model data at its host path so strata.json paths resolve unchanged.
+      - ${STRATA_DATA_DIR:-./strata-data}:${STRATA_DATA_DIR:-/strata-data}:ro
+      - type: bind
+        source: ${STRATA_DATA_DIR:-./strata-data}/strata.json
+        target: /etc/strata/strata.json
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      - loki-net
+
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
     container_name: loki-open-webui
     restart: always
     environment:
-      # Reach llama-server over the Compose network; applies until Open WebUI
+      # Reach the gateway over the Compose network; applies until Open WebUI
       # stores its own connection settings.
       - ENABLE_OLLAMA_API=false
-      - OPENAI_API_BASE_URL=http://llama:8080/v1
+      - OPENAI_API_BASE_URL=http://gateway:8080/v1
       - OPENAI_API_KEY=none
     depends_on:
-      - llama
+      - gateway
     volumes:
       - ./data/open-webui:/app/backend/data
     networks:

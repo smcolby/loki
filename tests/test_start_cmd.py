@@ -1,4 +1,4 @@
-"""Tests for the start subcommand — generated files, compose up, and mDNS."""
+"""Tests for the start subcommand: generated files, compose up, and mDNS."""
 
 from click.testing import CliRunner
 
@@ -60,13 +60,44 @@ def test_start_warns_when_no_presets(mocker, sample_config):
     assert "no */preset.ini" in result.output
 
 
-def test_start_prints_llama_api_url(mocker, sample_config):
-    """The start command prints the llama-server API address for LAN clients."""
+def test_start_prints_api_url_with_engines(mocker, sample_config):
+    """The start command prints the gateway API address and the engines behind it."""
     mocker.patch("loki.cli.load_config", return_value=sample_config)
 
     result = CliRunner().invoke(cli, ["start"])
 
-    assert "http://loki.local:8090/v1" in result.output
+    assert "Model API (llama): http://loki.local:8090/v1" in result.output
+
+
+def test_start_enables_strata_profile(mocker, sample_config, tmp_path):
+    """With Strata enabled and configured, .env selects its profile and routes it."""
+    sample_config.strata.enabled = True
+    sample_config.strata.data_dir = tmp_path / "strata"
+    sample_config.strata.data_dir.mkdir()
+    sample_config.strata.config_file.write_text("{}")
+    mocker.patch("loki.cli.load_config", return_value=sample_config)
+
+    result = CliRunner().invoke(cli, ["start"])
+
+    env = (tmp_path / ".env").read_text()
+    assert "COMPOSE_PROFILES=strata\n" in env
+    assert "LOKI_ENGINES=llama=http://llama:8080,strata=http://strata:8080\n" in env
+    assert "Model API (llama, strata)" in result.output
+
+
+def test_start_aborts_when_strata_config_missing(mocker, sample_config, tmp_path):
+    """With Strata enabled but no strata.json, start exits before writing files or starting."""
+    sample_config.strata.enabled = True
+    sample_config.strata.data_dir = tmp_path / "strata"
+    mocker.patch("loki.cli.load_config", return_value=sample_config)
+    mock_run = mocker.patch("loki.cli.subprocess.run", autospec=True)
+
+    result = CliRunner().invoke(cli, ["start"])
+
+    assert result.exit_code != 0
+    assert f"{tmp_path / 'strata' / 'strata.json'} does not exist" in result.output
+    mock_run.assert_not_called()
+    assert not (tmp_path / ".env").exists()
 
 
 def test_start_exits_when_docker_not_found(mocker, sample_config):

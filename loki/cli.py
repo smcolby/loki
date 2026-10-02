@@ -15,6 +15,9 @@ from loki.config import (
     build_env_file,
     caddyfile_path,
     env_file_path,
+    gateway_dir,
+    gateway_tag,
+    image_names,
     kiwix_dir,
     load_config,
     loki_root,
@@ -37,7 +40,7 @@ from loki.system import (
     upgrade_packages,
 )
 
-LLAMA_IMAGE = "loki-llama"
+BUILT_SERVICES = ("gateway", "llama", "strata")
 
 
 def _require_tool(name: str) -> None:
@@ -64,9 +67,43 @@ def _compose(*args: str) -> list[str]:
     return ["docker", "compose", "--project-directory", str(loki_root()), *args]
 
 
-def _llama_image_tag(config: LokiConfig) -> str:
-    """Return the image tag Compose builds for the configured GPU target and commit."""
-    return f"{config.llama.gpu_targets}-{config.llama.ref}"
+def _images(config: LokiConfig) -> dict[str, str]:
+    """Return the image each locally built service runs, keyed by service name."""
+    return image_names(config, gateway_tag(gateway_dir()))
+
+
+def _needed_services(config: LokiConfig) -> list[str]:
+    """Return the locally built services the configured stack runs."""
+    return ["gateway", *config.engine_services()]
+
+
+def _missing_services(config: LokiConfig) -> list[str]:
+    """Return the needed services whose image is not present locally."""
+    images = _images(config)
+    return [
+        service
+        for service in _needed_services(config)
+        if subprocess.run(
+            ["docker", "image", "inspect", images[service]], capture_output=True, check=False
+        ).returncode
+        != 0
+    ]
+
+
+def _build_services(services: list[str]) -> bool:
+    """Build images for ``services`` through Compose.
+
+    Returns
+    -------
+    bool
+        ``True`` if ``docker compose build`` exited with code 0.
+    """
+    return subprocess.run(_compose("build", *services), check=False).returncode == 0
+
+
+def _api_url(config: LokiConfig) -> str:
+    """Return the gateway's OpenAI-compatible base URL for LAN clients."""
+    return f"http://{config.url}:{config.ports.api}/v1"
 
 
 def _write_generated_files(config: LokiConfig) -> bool:
@@ -80,11 +117,22 @@ def _write_generated_files(config: LokiConfig) -> bool:
     Returns
     -------
     bool
-        ``True`` when every file was written, ``False`` when a model preset is
-        invalid (the error is printed and ``models.ini`` is left untouched).
+        ``True`` when every file was written, ``False`` when Strata is enabled
+        without its engine config or a model preset is invalid (the error is
+        printed and ``models.ini`` is left untouched).
     """
+    # Require Strata's engine config, which Compose would otherwise fail to mount
+    strata_config = config.strata.config_file
+    if config.strata.enabled and not strata_config.is_file():
+        click.echo(
+            f"Error: strata.enabled is true but {strata_config} does not exist "
+            "(see README for its format).",
+            err=True,
+        )
+        return False
+
     caddyfile_path().write_text(build_caddyfile(config.url))
-    env_file_path().write_text(build_env_file(config))
+    env_file_path().write_text(build_env_file(config, _images(config)))
 
     # Collect every model preset under the models directory
     models_dir = config.llama.models_dir
@@ -110,19 +158,20 @@ def _aria2c_threads() -> int:
     return max(1, (os.cpu_count() or 2) // 2)
 
 
-def _llama_model_states(port: int) -> dict[str, str]:
-    """Return each served model id mapped to its router status.
+def _model_states(port: int) -> dict[str, tuple[str, str]]:
+    """Return each served model id mapped to its engine and load status.
 
     Parameters
     ----------
     port : int
-        Host port of the llama-server router.
+        Host port of the gateway API.
 
     Returns
     -------
-    dict of str to str
-        Model id to status (``"loaded"``, ``"unloaded"``, ``"loading"``, ...);
-        empty when the listing cannot be read.
+    dict of str to tuple of (str, str)
+        Model id to ``(engine, status)``, where status is ``"loaded"``,
+        ``"unloaded"``, ``"loading"``, or ``"unknown"``; empty when the listing
+        cannot be read.
     """
     try:
         r = requests.get(f"http://localhost:{port}/v1/models", timeout=5)
@@ -132,32 +181,16 @@ def _llama_model_states(port: int) -> dict[str, str]:
     if not isinstance(entries, list):
         return {}
 
-    states: dict[str, str] = {}
+    states: dict[str, tuple[str, str]] = {}
     for entry in entries:
         if not isinstance(entry, dict) or "id" not in entry:
             continue
         status = entry.get("status")
         if isinstance(status, dict):
             status = status.get("value")
-        states[str(entry["id"])] = "unknown" if status is None else str(status)
+        engine = str(entry.get("owned_by", "unknown"))
+        states[str(entry["id"])] = (engine, "unknown" if status is None else str(status))
     return states
-
-
-def _build_llama_image(pull: bool = False) -> bool:
-    """Build the llama-server image through Compose.
-
-    Parameters
-    ----------
-    pull : bool, optional
-        Refresh the ROCm base image before building. Default is ``False``.
-
-    Returns
-    -------
-    bool
-        ``True`` if ``docker compose build`` exited with code 0.
-    """
-    args = ["build", "--pull", "llama"] if pull else ["build", "llama"]
-    return subprocess.run(_compose(*args), check=False).returncode == 0
 
 
 @click.group()
@@ -172,8 +205,9 @@ def setup() -> None:
     Walks through config review, system-package installation (aria2,
     avahi-daemon, avahi-utils), Docker installation, an AMD GPU check, and the
     ``LOKI_ROOT`` shell-profile export. Then writes the Caddyfile, ``.env``, and
-    ``models.ini``, offers to build the llama-server image, and downloads any
-    ZIM files listed in ``config.yaml``.
+    ``models.ini``, offers to build any missing local images (gateway,
+    llama-server, and Strata when enabled), and downloads any ZIM files listed
+    in ``config.yaml``.
     """
     config_path = loki_root() / "config.yaml"
     if not config_path.exists():
@@ -281,22 +315,27 @@ def setup() -> None:
     ports = config.ports
     click.echo(f"Caddyfile written for http://{config.url}")
     click.echo(
-        f"Port configuration written: caddy={ports.caddy}, kiwix={ports.kiwix}, llama={ports.llama}"
+        f"Port configuration written: caddy={ports.caddy}, kiwix={ports.kiwix}, api={ports.api}"
     )
 
-    # Build the llama-server image for the configured GPU and commit
+    # Build images missing for the configured engines, GPU, and commits
     if is_installed("docker"):
-        tag = _llama_image_tag(config)
-        if click.confirm(
-            f"\nBuild the llama-server image {LLAMA_IMAGE}:{tag} now (10-20 minutes)?",
+        missing = _missing_services(config)
+        images = _images(config)
+        if not missing:
+            click.echo("\nLocal images already built.")
+        elif click.confirm(
+            "\nBuild missing images now (llama-server and Strata take 10-30 minutes each)?\n  "
+            + "\n  ".join(images[service] for service in missing)
+            + "\n",
             default=True,
         ):
-            if _build_llama_image():
-                click.echo("llama-server image built.")
+            if _build_services(missing):
+                click.echo("Images built.")
             else:
-                click.echo("Warning: llama-server image build failed.", err=True)
+                click.echo("Warning: image build failed.", err=True)
         else:
-            click.echo("Skipping; `loki start` builds the image if it is missing.")
+            click.echo("Skipping; `loki start` builds missing images.")
 
     dest = kiwix_dir()
     dest.mkdir(parents=True, exist_ok=True)
@@ -331,12 +370,13 @@ def setup() -> None:
 
 @cli.command()
 def update() -> None:
-    """Update system packages, Docker Compose images, and the llama-server image.
+    """Update system packages and Docker Compose images.
 
     Upgrades aria2, avahi-daemon, and avahi-utils via the system package manager,
-    pulls the latest published images, rebuilds the llama-server image on a
-    refreshed ROCm base for the configured commit, and restarts the Compose
-    stack if it is running.
+    pulls the latest published images, builds local images whose tag is missing
+    (a changed commit, GPU target, ROCm version, or gateway source), and
+    restarts the Compose stack if it is running. Existing local images are
+    reused, since their tags name every build input.
     """
     # System packages
     manager = detect_package_manager()
@@ -366,13 +406,18 @@ def update() -> None:
         click.echo("Warning: docker compose pull failed.", err=True)
         return
 
-    # Locally built llama-server image
+    # Locally built images, only where config.yaml names one not yet built
     if not _write_generated_files(config):
         return
-    click.echo(f"\nRebuilding {LLAMA_IMAGE}:{_llama_image_tag(config)} ...")
-    if not _build_llama_image(pull=True):
-        click.echo("Warning: llama-server image build failed.", err=True)
-        return
+    missing = _missing_services(config)
+    if missing:
+        images = _images(config)
+        click.echo(f"\nBuilding {', '.join(images[service] for service in missing)} ...")
+        if not _build_services(missing):
+            click.echo("Warning: image build failed.", err=True)
+            return
+    else:
+        click.echo("\nLocal images are current.")
 
     # Restart the stack only if it is already running
     result = subprocess.run(_compose("ps", "-q"), capture_output=True, text=True, check=False)
@@ -393,9 +438,10 @@ def start() -> None:
     if not _write_generated_files(config):
         raise SystemExit(1)
 
+    # Compose builds any missing local image before starting its service
     click.echo("Starting Docker Compose stack ...")
     subprocess.run(_compose("up", "-d"), check=False)
-    click.echo(f"llama-server API: http://{config.url}:{config.ports.llama}/v1")
+    click.echo(f"Model API ({', '.join(config.engine_services())}): {_api_url(config)}")
 
     hostname = config.url
     if hostname.endswith(".local"):
@@ -434,23 +480,29 @@ def status() -> None:
     config = load_config()
     click.echo("Checking service status ...")
 
-    # llama-server router health
-    llama_url = f"http://localhost:{config.ports.llama}/health"
+    # Gateway health and each engine behind it
+    api_url = f"http://localhost:{config.ports.api}/health"
     try:
-        r = requests.get(llama_url, timeout=5)
-        llama_online = r.status_code == 200
-        if llama_online:
-            click.echo(f"  llama-server: ONLINE ({llama_url})")
+        r = requests.get(api_url, timeout=5)
+        health = r.json() if r.status_code == 200 else None
+        if isinstance(health, dict):
+            click.echo(f"  Model API: ONLINE ({api_url})")
         else:
-            click.echo(f"  llama-server: OFFLINE — HTTP {r.status_code} ({llama_url})")
-    except requests.exceptions.RequestException as exc:
-        llama_online = False
-        click.echo(f"  llama-server: OFFLINE — {exc} ({llama_url})")
+            click.echo(f"  Model API: OFFLINE — HTTP {r.status_code} ({api_url})")
+    except (requests.exceptions.RequestException, ValueError) as exc:
+        health = None
+        click.echo(f"  Model API: OFFLINE — {exc} ({api_url})")
 
-    # Served models and which are in VRAM
-    if llama_online:
-        for model_id, state in _llama_model_states(config.ports.llama).items():
-            click.echo(f"    {model_id}: {state}")
+    # Engine states, then served models and which are in VRAM
+    if isinstance(health, dict):
+        engines = health.get("engines")
+        if isinstance(engines, dict):
+            active = health.get("active")
+            for name, state in engines.items():
+                marker = " (holds the GPU)" if name == active else ""
+                click.echo(f"    engine {name}: {state}{marker}")
+        for model_id, (engine, state) in _model_states(config.ports.api).items():
+            click.echo(f"    {model_id} [{engine}]: {state}")
 
     # Kiwix
     kiwix_url = f"http://localhost:{config.ports.kiwix}"
@@ -465,7 +517,8 @@ def status() -> None:
 
     # Docker containers
     if shutil.which("docker"):
-        for name in ("loki-llama", "loki-open-webui", "loki-caddy", "loki-kiwix"):
+        engines = [f"loki-{service}" for service in config.engine_services()]
+        for name in ("loki-gateway", *engines, "loki-open-webui", "loki-caddy", "loki-kiwix"):
             result = subprocess.run(
                 ["docker", "inspect", "--format", "{{.State.Status}}", name],
                 capture_output=True,
@@ -484,7 +537,7 @@ def status() -> None:
 
 @cli.command()
 def cleanup() -> None:
-    """Remove ZIM files and llama-server images no longer matching the config."""
+    """Remove ZIM files and locally built images no longer matching the config."""
     _require_tool("docker")
     config = load_config()
 
@@ -511,28 +564,32 @@ def cleanup() -> None:
     else:
         click.echo("No orphaned ZIM files found.")
 
-    # llama-server images built for another commit or GPU target
-    result = subprocess.run(
-        ["docker", "images", LLAMA_IMAGE, "--format", "{{.Tag}}"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    current = _llama_image_tag(config)
-    stale_tags = sorted({tag for tag in result.stdout.split() if tag != current})
+    # Local images built for another commit, GPU target, ROCm version, or gateway source
+    current = set(_images(config).values())
+    stale: list[str] = []
+    for service in BUILT_SERVICES:
+        repo = f"loki-{service}"
+        result = subprocess.run(
+            ["docker", "images", repo, "--format", "{{.Tag}}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        tags = {tag for tag in result.stdout.split() if tag != "<none>"}
+        stale += sorted(f"{repo}:{tag}" for tag in tags if f"{repo}:{tag}" not in current)
 
-    if stale_tags:
-        click.echo(f"Old {LLAMA_IMAGE} images not matching config.yaml:")
-        for tag in stale_tags:
-            click.echo(f"  {LLAMA_IMAGE}:{tag}")
-        if click.confirm(f"Remove {len(stale_tags)} image(s)?", default=False):
-            for tag in stale_tags:
-                subprocess.run(["docker", "image", "rm", f"{LLAMA_IMAGE}:{tag}"], check=False)
-                click.echo(f"Removed {LLAMA_IMAGE}:{tag}.")
+    if stale:
+        click.echo("Old loki images not matching config.yaml:")
+        for image in stale:
+            click.echo(f"  {image}")
+        if click.confirm(f"Remove {len(stale)} image(s)?", default=False):
+            for image in stale:
+                subprocess.run(["docker", "image", "rm", image], check=False)
+                click.echo(f"Removed {image}.")
         else:
             click.echo("Skipping image removal.")
     else:
-        click.echo(f"No old {LLAMA_IMAGE} images found.")
+        click.echo("No old loki images found.")
 
 
 def main() -> None:

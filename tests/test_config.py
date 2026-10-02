@@ -1,4 +1,4 @@
-"""Tests for config.py — YAML loading, path resolution, and Caddyfile generation."""
+"""Tests for config.py: YAML loading, path resolution, image names, and generated files."""
 
 import textwrap
 
@@ -11,10 +11,13 @@ from loki.config import (
     LlamaConfig,
     LokiConfig,
     PortsConfig,
+    StrataConfig,
     build_caddyfile,
     build_env_file,
     caddyfile_path,
     env_file_path,
+    gateway_tag,
+    image_names,
     kiwix_dir,
     load_config,
     models_preset_path,
@@ -73,8 +76,13 @@ def test_load_config_empty_lists(tmp_path):
 
 @pytest.mark.parametrize(
     "text",
-    ["ollama_models:\n  - llama3:8b\n", "ports:\n  ollama: 11434\n", "llama:\n  model_dir: /x\n"],
-    ids=["ollama-models", "ollama-port", "misspelled-llama-key"],
+    [
+        "ollama_models:\n  - llama3:8b\n",
+        "ports:\n  ollama: 11434\n",
+        "ports:\n  llama: 8090\n",
+        "llama:\n  model_dir: /x\n",
+    ],
+    ids=["ollama-models", "ollama-port", "retired-llama-port", "misspelled-llama-key"],
 )
 def test_load_config_rejects_unknown_keys(tmp_path, text):
     """load_config fails loudly on keys it does not understand, including retired Ollama keys."""
@@ -95,8 +103,10 @@ def test_load_config_applies_defaults_for_missing_keys(tmp_path):
     assert config.url == "loki.local"
     assert config.ports.caddy == 80
     assert config.ports.kiwix == 8080
-    assert config.ports.llama == 8090
+    assert config.ports.api == 8090
     assert config.llama.defaults == DEFAULT_PRESET_SETTINGS
+    assert config.strata.enabled is False
+    assert config.engine_services() == ["llama"]
 
 
 def test_load_config_raises_on_invalid_port_type(tmp_path):
@@ -203,7 +213,7 @@ def test_ports_config_defaults():
     ports = PortsConfig()
     assert ports.caddy == 80
     assert ports.kiwix == 8080
-    assert ports.llama == 8090
+    assert ports.api == 8090
 
 
 def test_ports_config_partial_override():
@@ -211,35 +221,39 @@ def test_ports_config_partial_override():
     ports = PortsConfig(kiwix=9090)
     assert ports.kiwix == 9090
     assert ports.caddy == 80
-    assert ports.llama == 8090
+    assert ports.api == 8090
 
 
 def test_ports_config_full_override():
     """PortsConfig accepts fully custom port values."""
-    ports = PortsConfig(caddy=8000, kiwix=9090, llama=9000)
+    ports = PortsConfig(caddy=8000, kiwix=9090, api=9000)
     assert ports.caddy == 8000
     assert ports.kiwix == 9090
-    assert ports.llama == 9000
+    assert ports.api == 9000
+
+
+IMAGES = {"llama": "loki-llama:x", "strata": "loki-strata:y", "gateway": "loki-gateway:z"}
 
 
 def test_build_env_file_contains_all_ports():
-    """build_env_file returns content with CADDY_PORT, KIWIX_PORT, and LLAMA_PORT."""
-    content = build_env_file(LokiConfig())
-    assert "CADDY_PORT=80" in content
-    assert "KIWIX_PORT=8080" in content
-    assert "LLAMA_PORT=8090" in content
+    """build_env_file returns content with CADDY_PORT, KIWIX_PORT, and API_PORT."""
+    lines = build_env_file(LokiConfig(), IMAGES).splitlines()
+    assert "CADDY_PORT=80" in lines
+    assert "KIWIX_PORT=8080" in lines
+    assert "API_PORT=8090" in lines
 
 
 def test_build_env_file_uses_custom_ports():
     """build_env_file reflects custom port values."""
-    content = build_env_file(LokiConfig(ports=PortsConfig(caddy=8000, kiwix=9090, llama=9000)))
-    assert "CADDY_PORT=8000" in content
-    assert "KIWIX_PORT=9090" in content
-    assert "LLAMA_PORT=9000" in content
+    config = LokiConfig(ports=PortsConfig(caddy=8000, kiwix=9090, api=9000))
+    lines = build_env_file(config, IMAGES).splitlines()
+    assert "CADDY_PORT=8000" in lines
+    assert "KIWIX_PORT=9090" in lines
+    assert "API_PORT=9000" in lines
 
 
 def test_build_env_file_contains_llama_build_settings(tmp_path):
-    """build_env_file passes the models mount and image build arguments to Compose."""
+    """build_env_file passes the models mount, image, and build arguments to Compose."""
     llama = LlamaConfig(
         models_dir=tmp_path,
         ref="deadbeef",
@@ -248,13 +262,79 @@ def test_build_env_file_contains_llama_build_settings(tmp_path):
         max_loaded=2,
     )
 
-    lines = build_env_file(LokiConfig(llama=llama)).splitlines()
+    lines = build_env_file(LokiConfig(llama=llama), IMAGES).splitlines()
 
+    assert "LLAMA_IMAGE=loki-llama:x" in lines
     assert f"LLAMA_MODELS_DIR={tmp_path}" in lines
     assert "LLAMA_CPP_REF=deadbeef" in lines
     assert "LLAMA_GPU_TARGETS=gfx1201" in lines
     assert "LLAMA_MAX_LOADED=2" in lines
-    assert "ROCM_VERSION=7.2.4" in lines
+    assert "LLAMA_ROCM_VERSION=7.2.4" in lines
+    assert "GATEWAY_IMAGE=loki-gateway:z" in lines
+
+
+def test_build_env_file_without_strata_routes_only_llama():
+    """With Strata disabled, no Compose profile is active and the gateway sees only llama."""
+    lines = build_env_file(LokiConfig(), IMAGES).splitlines()
+
+    assert "COMPOSE_PROFILES=" in lines
+    assert "LOKI_ENGINES=llama=http://llama:8080" in lines
+
+
+def test_build_env_file_with_strata_enables_profile_and_engine(tmp_path):
+    """With Strata enabled, its profile runs and the gateway routes to both engines."""
+    strata = StrataConfig(
+        enabled=True, data_dir=tmp_path, ref="cafe", gpu_targets="gfx1100", rocm_version="7.10"
+    )
+
+    lines = build_env_file(LokiConfig(strata=strata), IMAGES).splitlines()
+
+    assert "COMPOSE_PROFILES=strata" in lines
+    assert "LOKI_ENGINES=llama=http://llama:8080,strata=http://strata:8080" in lines
+    assert "STRATA_IMAGE=loki-strata:y" in lines
+    assert f"STRATA_DATA_DIR={tmp_path}" in lines
+    assert "STRATA_REF=cafe" in lines
+    assert "STRATA_GPU_TARGETS=gfx1100" in lines
+    assert "STRATA_ROCM_VERSION=7.10" in lines
+
+
+def test_image_names_carry_every_build_input():
+    """Image tags name the GPU target, ROCm version, and commit, so a change names a new image."""
+    config = LokiConfig(
+        llama=LlamaConfig(ref="aaa", gpu_targets="gfx1201", rocm_version="7.2.4"),
+        strata=StrataConfig(ref="bbb", gpu_targets="gfx1100", rocm_version="7.10.0a1"),
+    )
+
+    assert image_names(config, "0123abcd") == {
+        "llama": "loki-llama:gfx1201-rocm7.2.4-aaa",
+        "strata": "loki-strata:gfx1100-rocm7.10.0a1-bbb",
+        "gateway": "loki-gateway:0123abcd",
+    }
+
+
+def test_gateway_tag_tracks_source_contents(gateway_sources):
+    """The gateway tag is stable for unchanged sources and changes when any source changes."""
+    first = gateway_tag(gateway_sources)
+    assert gateway_tag(gateway_sources) == first
+    assert len(first) == 12
+
+    (gateway_sources / "gateway.py").write_text("changed\n")
+
+    assert gateway_tag(gateway_sources) != first
+
+
+def test_gateway_tag_fails_on_missing_source(tmp_path):
+    """A gateway directory without its sources raises instead of naming an arbitrary image."""
+    with pytest.raises(FileNotFoundError):
+        gateway_tag(tmp_path)
+
+
+def test_strata_data_dir_expands_home(monkeypatch, tmp_path):
+    """The default Strata data_dir is absolute, and strata.json sits inside it."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    strata = StrataConfig()
+    assert strata.data_dir == tmp_path / ".llms" / "strata"
+    assert strata.config_file == tmp_path / ".llms" / "strata" / "strata.json"
 
 
 def test_env_file_path_is_under_loki_root(monkeypatch, tmp_path):

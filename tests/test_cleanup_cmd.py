@@ -1,4 +1,4 @@
-"""Tests for the cleanup subcommand — orphaned ZIM files and old llama-server images."""
+"""Tests for the cleanup subcommand: orphaned ZIM files and old locally built images."""
 
 import subprocess
 from pathlib import Path
@@ -7,13 +7,21 @@ import pytest
 from click.testing import CliRunner
 
 from loki.cli import cli
+from loki.config import gateway_tag
+
+LLAMA = "loki-llama:gfx1100-rocm7.2.4-abc123"
 
 
-def _images(*tags: str) -> subprocess.CompletedProcess:
-    """Return ``docker images loki-llama --format {{.Tag}}`` output listing ``tags``."""
-    return subprocess.CompletedProcess(
-        args=[], returncode=0, stdout="".join(f"{t}\n" for t in tags)
-    )
+def _docker(mocker, tags: dict[str, list[str]]):
+    """Patch ``subprocess.run`` so ``docker images <repo>`` lists ``tags[repo]``."""
+
+    def _run(args, *_, **__):
+        stdout = ""
+        if args[:2] == ["docker", "images"]:
+            stdout = "".join(f"{tag}\n" for tag in tags.get(args[2], []))
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout=stdout)
+
+    return mocker.patch("loki.cli.subprocess.run", autospec=True, side_effect=_run)
 
 
 @pytest.fixture(autouse=True)
@@ -81,51 +89,60 @@ def test_cleanup_handles_missing_kiwix_dir(mocker, tmp_path):
     assert "No orphaned ZIM files found." in result.output
 
 
-# --- llama-server image cleanup tests ---
+# --- Local image cleanup tests ---
 
 
-def test_cleanup_keeps_current_image(mocker):
-    """Cleanup reports nothing to remove when only the configured image exists."""
-    mocker.patch("loki.cli.subprocess.run", autospec=True, return_value=_images("gfx1100-abc123"))
+def test_cleanup_keeps_current_images(mocker, gateway_sources):
+    """Cleanup reports nothing to remove when only the configured images exist."""
+    _docker(
+        mocker,
+        {
+            "loki-llama": [LLAMA.split(":")[1]],
+            "loki-gateway": [gateway_tag(gateway_sources)],
+            "loki-strata": ["gfx1100-rocm7.10.0a20251120-1678de333d0e0711bc414ad992b640e1a37dd814"],
+        },
+    )
 
     result = CliRunner().invoke(cli, ["cleanup"])
 
-    assert "No old loki-llama images found." in result.output
+    assert "No old loki images found." in result.output
 
 
-def test_cleanup_lists_images_for_other_commits(mocker):
-    """Cleanup lists images built for a commit or target the config no longer names."""
-    mocker.patch(
-        "loki.cli.subprocess.run",
-        autospec=True,
-        return_value=_images("gfx1100-abc123", "gfx1100-old999", "gfx1201-abc123"),
+def test_cleanup_lists_stale_images_across_repos(mocker):
+    """Cleanup lists every image whose tag the config no longer names, in each repository."""
+    _docker(
+        mocker,
+        {
+            "loki-llama": ["gfx1100-rocm7.2.4-abc123", "gfx1100-rocm7.2.4-old999", "<none>"],
+            "loki-gateway": ["0123456789ab"],
+            "loki-strata": ["gfx1201-rocm7.10.0a20251120-old"],
+        },
     )
 
     result = CliRunner().invoke(cli, ["cleanup"], input="n\n")
 
-    assert "loki-llama:gfx1100-old999" in result.output
-    assert "loki-llama:gfx1201-abc123" in result.output
-    assert "loki-llama:gfx1100-abc123" not in result.output
+    assert "loki-llama:gfx1100-rocm7.2.4-old999" in result.output
+    assert "loki-gateway:0123456789ab" in result.output
+    assert "loki-strata:gfx1201-rocm7.10.0a20251120-old" in result.output
+    assert LLAMA not in result.output
+    assert "<none>" not in result.output
+    assert "Skipping image removal." in result.output
 
 
 def test_cleanup_removes_old_images_on_confirm(mocker):
     """Cleanup runs `docker image rm` for each old image when the user confirms."""
-    mock_run = mocker.patch(
-        "loki.cli.subprocess.run",
-        autospec=True,
-        side_effect=[_images("gfx1100-abc123", "gfx1100-old999"), _images()],
-    )
+    mock_run = _docker(mocker, {"loki-llama": ["gfx1100-rocm7.2.4-abc123", "gfx1100-old999"]})
 
-    CliRunner().invoke(cli, ["cleanup"], input="y\n")
+    result = CliRunner().invoke(cli, ["cleanup"], input="y\n")
 
     mock_run.assert_any_call(["docker", "image", "rm", "loki-llama:gfx1100-old999"], check=False)
+    assert all(call.args[0] != ["docker", "image", "rm", LLAMA] for call in mock_run.call_args_list)
+    assert "Removed loki-llama:gfx1100-old999." in result.output
 
 
 def test_cleanup_skips_image_removal_on_deny(mocker):
     """Cleanup does not remove images when the user denies the prompt."""
-    mock_run = mocker.patch(
-        "loki.cli.subprocess.run", autospec=True, return_value=_images("gfx1100-old999")
-    )
+    mock_run = _docker(mocker, {"loki-llama": ["gfx1100-old999"]})
 
     CliRunner().invoke(cli, ["cleanup"], input="n\n")
 

@@ -1,4 +1,4 @@
-"""Tests for the setup subcommand — system setup prompts, generated files, image build, and
+"""Tests for the setup subcommand: system setup prompts, generated files, image builds, and
 ZIM downloads.
 """
 
@@ -40,12 +40,12 @@ def test_setup_writes_env_file(mocker, sample_config, tmp_path):
     content = (tmp_path / ".env").read_text()
     assert "CADDY_PORT=80" in content
     assert "KIWIX_PORT=8080" in content
-    assert "LLAMA_PORT=8090" in content
+    assert "API_PORT=8090" in content
 
 
 def test_setup_env_file_uses_custom_ports(mocker, tmp_path):
     """The setup command writes custom port values to the .env file."""
-    config = LokiConfig(ports=PortsConfig(caddy=8000, kiwix=9090, llama=9000))
+    config = LokiConfig(ports=PortsConfig(caddy=8000, kiwix=9090, api=9000))
     mocker.patch("loki.cli.load_config", return_value=config)
     mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path)
     mocker.patch("loki.cli.caddyfile_path", return_value=tmp_path / "Caddyfile")
@@ -57,7 +57,7 @@ def test_setup_env_file_uses_custom_ports(mocker, tmp_path):
     content = (tmp_path / ".env").read_text()
     assert "CADDY_PORT=8000" in content
     assert "KIWIX_PORT=9090" in content
-    assert "LLAMA_PORT=9000" in content
+    assert "API_PORT=9000" in content
 
 
 def test_setup_uses_default_caddy_url_when_missing(mocker, tmp_path):
@@ -100,7 +100,7 @@ def test_setup_prints_port_confirmation(mocker, sample_config, tmp_path):
 
     assert "caddy=80" in result.output
     assert "kiwix=8080" in result.output
-    assert "llama=8090" in result.output
+    assert "api=8090" in result.output
 
 
 def test_aria2c_threads_is_half_cpu_count(mocker):
@@ -445,7 +445,7 @@ def test_setup_warns_without_gpu_devices(mocker, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Generated files and llama-server image
+# Generated files and local images
 # ---------------------------------------------------------------------------
 
 
@@ -460,11 +460,12 @@ def test_setup_writes_models_preset(mocker, sample_config, tmp_path, write_prese
     assert "[alpha]" in (tmp_path / "models.ini").read_text()
 
 
-def test_setup_builds_llama_image_on_confirm(mocker, sample_config, tmp_path):
-    """Accepting the build prompt runs docker compose build for the llama service."""
+def test_setup_builds_missing_images_on_confirm(mocker, sample_config, tmp_path, missing_services):
+    """Accepting the build prompt builds only the services whose image is missing."""
     mocker.patch("loki.cli.load_config", return_value=sample_config)
     mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path)
     (tmp_path / Path(sample_config.kiwix_files[0].url).name).touch()
+    missing_services.return_value = ["llama"]
     mock_run = mocker.patch(
         "loki.cli.subprocess.run",
         autospec=True,
@@ -474,18 +475,19 @@ def test_setup_builds_llama_image_on_confirm(mocker, sample_config, tmp_path):
     result = CliRunner().invoke(cli, ["setup"], input="y\ny\n")
 
     commands = [call.args[0] for call in mock_run.call_args_list]
-    assert any(
-        cmd[:2] == ["docker", "compose"] and cmd[-2:] == ["build", "llama"] for cmd in commands
-    )
-    assert "loki-llama:gfx1100-abc123" in result.output
-    assert "llama-server image built." in result.output
+    assert [cmd[-2:] for cmd in commands if cmd[:2] == ["docker", "compose"]] == [
+        ["build", "llama"]
+    ]
+    assert "loki-llama:gfx1100-rocm7.2.4-abc123" in result.output
+    assert "Images built." in result.output
 
 
-def test_setup_warns_when_llama_build_fails(mocker, sample_config, tmp_path):
+def test_setup_warns_when_image_build_fails(mocker, sample_config, tmp_path, missing_services):
     """A failed image build prints a warning instead of stopping setup."""
     mocker.patch("loki.cli.load_config", return_value=sample_config)
     mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path)
     (tmp_path / Path(sample_config.kiwix_files[0].url).name).touch()
+    missing_services.return_value = ["gateway", "llama"]
     mocker.patch(
         "loki.cli.subprocess.run",
         autospec=True,
@@ -498,29 +500,45 @@ def test_setup_warns_when_llama_build_fails(mocker, sample_config, tmp_path):
     assert "Skipping" in result.output
 
 
-def test_setup_skips_llama_build_on_decline(mocker, sample_config, tmp_path):
+def test_setup_skips_build_on_decline(mocker, sample_config, tmp_path, missing_services):
     """Declining the build prompt leaves the build to loki start."""
     mocker.patch("loki.cli.load_config", return_value=sample_config)
     mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path)
     (tmp_path / Path(sample_config.kiwix_files[0].url).name).touch()
+    missing_services.return_value = ["llama"]
     mock_run = mocker.patch("loki.cli.subprocess.run", autospec=True)
 
     result = CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
     mock_run.assert_not_called()
-    assert "builds the image if it is missing" in result.output
+    assert "`loki start` builds missing images" in result.output
 
 
-def test_setup_skips_build_prompt_without_docker(mocker, tmp_path):
+def test_setup_reports_images_already_built(mocker, sample_config, tmp_path):
+    """With every image present, setup builds nothing and does not prompt."""
+    mocker.patch("loki.cli.load_config", return_value=sample_config)
+    mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path)
+    (tmp_path / Path(sample_config.kiwix_files[0].url).name).touch()
+    mock_run = mocker.patch("loki.cli.subprocess.run", autospec=True)
+
+    result = CliRunner().invoke(cli, ["setup"], input="y\n")
+
+    mock_run.assert_not_called()
+    assert "Local images already built." in result.output
+
+
+def test_setup_skips_build_prompt_without_docker(mocker, tmp_path, missing_services):
     """The build prompt is not offered when Docker is still missing."""
     mocker.patch("loki.cli.load_config", return_value=LokiConfig())
     mocker.patch("loki.cli.loki_root", return_value=tmp_path)
     mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path)
     mocker.patch("loki.cli.is_installed", side_effect=lambda cmd: cmd != "docker")
+    missing_services.return_value = ["llama"]
 
     result = CliRunner().invoke(cli, ["setup"], input="y\nn\n")
 
-    assert "Build the llama-server image" not in result.output
+    assert "Build missing images" not in result.output
+    missing_services.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

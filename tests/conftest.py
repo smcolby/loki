@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from loki.config import KiwixFile, LlamaConfig, LokiConfig, PortsConfig
+from loki.config import GATEWAY_SOURCES, KiwixFile, LlamaConfig, LokiConfig, PortsConfig
 
 
 @pytest.fixture
@@ -13,7 +13,7 @@ def sample_config(tmp_path) -> LokiConfig:
     """Return a synthetic LokiConfig instance for use across tests."""
     return LokiConfig(
         url="loki.local",
-        ports=PortsConfig(caddy=80, kiwix=8080, llama=8090),
+        ports=PortsConfig(caddy=80, kiwix=8080, api=8090),
         llama=LlamaConfig(models_dir=tmp_path / "models", ref="abc123", gpu_targets="gfx1100"),
         kiwix_files=[
             KiwixFile(
@@ -38,6 +38,23 @@ def _isolate_paths(mocker, monkeypatch, tmp_path):
     mocker.patch("loki.cli.caddyfile_path", return_value=tmp_path / "Caddyfile")
     mocker.patch("loki.cli.env_file_path", return_value=tmp_path / ".env")
     mocker.patch("loki.cli.models_preset_path", return_value=tmp_path / "models.ini")
+
+
+@pytest.fixture(autouse=True)
+def gateway_sources(mocker, tmp_path) -> Path:
+    """Give the gateway image tag fixed build inputs under ``tmp_path``."""
+    source_dir = tmp_path / "gateway"
+    source_dir.mkdir()
+    for name in GATEWAY_SOURCES:
+        (source_dir / name).write_text(f"{name}\n")
+    mocker.patch("loki.cli.gateway_dir", return_value=source_dir)
+    return source_dir
+
+
+@pytest.fixture(autouse=True)
+def missing_services(mocker):
+    """Report every local image as built; image tests set ``return_value`` or re-patch."""
+    return mocker.patch("loki.cli._missing_services", return_value=[])
 
 
 @pytest.fixture(autouse=True)

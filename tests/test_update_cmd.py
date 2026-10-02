@@ -78,21 +78,34 @@ def test_update_pulls_only_published_images(mocker):
     assert first[-2:] == ["pull", "--ignore-buildable"]
 
 
-def test_update_rebuilds_llama_image_on_fresh_base(mocker):
-    """Update rebuilds the llama service and refreshes its ROCm base image."""
+def test_update_builds_only_missing_images(mocker, missing_services):
+    """Update builds the services whose configured image tag is not present locally."""
     mocker.patch("loki.cli.upgrade_packages", return_value=True)
+    missing_services.return_value = ["llama"]
     mock_run = mocker.patch("loki.cli.subprocess.run", autospec=True, return_value=_completed())
 
     result = CliRunner().invoke(cli, ["update"])
 
     commands = [call.args[0] for call in mock_run.call_args_list]
-    assert any(cmd[-3:] == ["build", "--pull", "llama"] for cmd in commands)
-    assert "loki-llama:gfx1100-abc123" in result.output
+    assert [cmd[-2:] for cmd in commands if "build" in cmd] == [["build", "llama"]]
+    assert "Building loki-llama:gfx1100-rocm7.2.4-abc123" in result.output
 
 
-def test_update_writes_generated_files_before_build(mocker, tmp_path):
+def test_update_skips_build_when_images_current(mocker):
+    """Update builds nothing when every configured image is already present."""
+    mocker.patch("loki.cli.upgrade_packages", return_value=True)
+    mock_run = mocker.patch("loki.cli.subprocess.run", autospec=True, return_value=_completed())
+
+    result = CliRunner().invoke(cli, ["update"])
+
+    assert not any("build" in call.args[0] for call in mock_run.call_args_list)
+    assert "Local images are current." in result.output
+
+
+def test_update_writes_generated_files_before_build(mocker, tmp_path, missing_services):
     """Update refreshes .env so the build sees the configured commit."""
     mocker.patch("loki.cli.upgrade_packages", return_value=True)
+    missing_services.return_value = ["llama"]
     seen = []
 
     def _record(cmd, *_, **__):
@@ -121,9 +134,10 @@ def test_update_warns_and_returns_early_on_pull_failure(mocker):
     assert len(mock_run.call_args_list) == 1
 
 
-def test_update_stops_on_build_failure(mocker):
+def test_update_stops_on_build_failure(mocker, missing_services):
     """Update warns and leaves the running stack alone when the image build fails."""
     mocker.patch("loki.cli.upgrade_packages", return_value=True)
+    missing_services.return_value = ["llama"]
     mock_run = mocker.patch(
         "loki.cli.subprocess.run",
         autospec=True,
@@ -156,7 +170,6 @@ def test_update_restarts_stack_when_running(mocker):
         autospec=True,
         side_effect=[
             _completed(),  # pull
-            _completed(),  # build
             _completed(stdout="abc\n"),  # ps -q → stack running
             _completed(),  # up -d
         ],
@@ -176,7 +189,6 @@ def test_update_skips_restart_when_stack_not_running(mocker):
         autospec=True,
         side_effect=[
             _completed(),  # pull
-            _completed(),  # build
             _completed(stdout=""),  # ps -q → stack not running
         ],
     )
