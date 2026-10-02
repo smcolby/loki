@@ -1,7 +1,7 @@
 """Route OpenAI and Anthropic API requests to whichever engine serves the model.
 
-loki runs llama-server and Strata side by side, but one GPU holds only one of
-them at a time. The gateway publishes a single API: it merges the engines'
+loki runs llama-server, Strata, and sd-server side by side, but one GPU holds
+only one of them at a time. The gateway publishes a single API: it merges the engines'
 model lists, sends each request to the engine that owns the requested model,
 and unloads every other engine's models before the first request to a
 different engine. Requests to the engine that already holds the GPU pass
@@ -14,9 +14,8 @@ import json
 import logging
 import os
 import time
-from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 from aiohttp import ClientError, ClientSession, ClientTimeout, web
 
@@ -36,12 +35,13 @@ HOP_BY_HOP = frozenset(
         "upgrade",
     }
 )
-INFERENCE_PATHS = (
+TEXT_PATHS = (
     "/v1/chat/completions",
     "/v1/completions",
     "/v1/messages",
     "/v1/messages/count_tokens",
 )
+IMAGE_PATHS = ("/v1/images/generations",)
 MODEL_LIST_TTL = 30.0
 UNLOAD_TIMEOUT = 120.0
 POLL_INTERVAL = 0.5
@@ -63,12 +63,17 @@ class Engine:
     Parameters
     ----------
     name : str
-        Short engine name shown in logs and the model list (``llama`` or ``strata``).
+        Engine name shown in logs and the model list; its prefix before the first
+        hyphen is the engine type (``llama``, ``strata``, or ``image``).
     url : str
         Base URL of the engine's HTTP API, without a trailing slash.
     session : ClientSession
         Shared client session for engine requests.
     """
+
+    # Request paths the engine serves, and whether /v1/models lists its models
+    paths: ClassVar[tuple[str, ...]] = TEXT_PATHS
+    listed: ClassVar[bool] = True
 
     name: str
     url: str
@@ -164,7 +169,7 @@ class StrataEngine(Engine):
     """Strata's server, which serves one model and unloads it on request."""
 
     async def loaded(self) -> bool:
-        """Report whether Strata's engine process is running."""
+        """Report whether the engine process is running."""
         body = await self._get_json("/health")
         return bool(isinstance(body, dict) and body.get("loaded"))
 
@@ -174,7 +179,29 @@ class StrataEngine(Engine):
             async with self.session.post(self.url + "/unload") as response:
                 await response.read()
         except (ClientError, TimeoutError) as exc:
-            raise EngineError(f"strata unload failed: {exc}") from exc
+            raise EngineError(f"{self.name} unload failed: {exc}") from exc
+
+
+@dataclass
+class ImageEngine(StrataEngine):
+    """stable-diffusion.cpp's sd-server, which generates images from one model.
+
+    The image's supervisor runs sd-server on demand and offers Strata's
+    ``/health`` and ``/unload``, so the engine unloads like Strata. sd-server
+    lists a fixed model id and ignores the requested one, so the gateway
+    publishes ``model_id`` in its place. Its models stay out of ``/v1/models``,
+    which chat clients read as a list of chat models.
+    """
+
+    paths: ClassVar[tuple[str, ...]] = IMAGE_PATHS
+    listed: ClassVar[bool] = False
+
+    model_id: str
+
+    async def models(self) -> list[dict[str, Any]]:
+        """Return the configured model once sd-server answers its model listing."""
+        await self._get_json("/v1/models")
+        return [{"id": self.model_id, "object": "model"}]
 
 
 @dataclass
@@ -281,7 +308,8 @@ class Gateway:
                         f"{owners[model['id']].name} and {engine.name}"
                     )
                 owners[model["id"]] = engine
-                listed.append({**model, "owned_by": engine.name})
+                if engine.listed:
+                    listed.append({**model, "owned_by": engine.name})
         self._owners, self._listed, self._refreshed = owners, listed, time.monotonic()
         return listed
 
@@ -306,7 +334,7 @@ async def handle_health(request: web.Request) -> web.Response:
 
 
 async def handle_models(request: web.Request) -> web.Response:
-    """Serve the merged model list."""
+    """Serve the merged list of text models."""
     gateway: Gateway = request.app["gateway"]
     try:
         listed = await gateway.refresh()
@@ -365,6 +393,8 @@ async def handle_inference(request: web.Request) -> web.StreamResponse:
         return api_error(500, str(exc), "server_error")
     if engine is None:
         return api_error(404, f"model {model_id!r} is not served by any engine")
+    if request.path not in engine.paths:
+        return api_error(400, f"model {model_id!r} does not serve {request.path}")
 
     try:
         await gateway.arbiter.acquire(engine)
@@ -382,27 +412,50 @@ def build_app(engines: list[Engine]) -> web.Application:
     app["gateway"] = Gateway(engines)
     app.router.add_get("/health", handle_health)
     app.router.add_get("/v1/models", handle_models)
-    for path in INFERENCE_PATHS:
+    for path in (*TEXT_PATHS, *IMAGE_PATHS):
         app.router.add_post(path, handle_inference)
     return app
 
 
-ENGINE_TYPES: dict[str, Callable[[str, str, ClientSession], Engine]] = {
+ENGINE_TYPES: dict[str, type[Engine]] = {
     "llama": LlamaEngine,
     "strata": StrataEngine,
+    "image": ImageEngine,
 }
 
 
-def parse_engines(spec: str, session: ClientSession) -> list[Engine]:
+def _pairs(spec: str) -> list[tuple[str, str]]:
+    """Split comma-separated ``name=value`` entries, raising ValueError on a malformed one."""
+    pairs = []
+    for entry in filter(None, (part.strip() for part in spec.split(","))):
+        name, sep, value = entry.partition("=")
+        if not sep or not value:
+            raise ValueError(f"engine entry {entry!r} is not name=value")
+        pairs.append((name, value))
+    return pairs
+
+
+def parse_engines(spec: str, session: ClientSession, image_models: str = "") -> list[Engine]:
     """Build engines from ``name=url`` pairs separated by commas.
 
     The engine type is the name up to its first hyphen, so ``strata`` and
     ``strata-swift`` are both Strata engines with their own containers.
 
+    Parameters
+    ----------
+    spec : str
+        ``LOKI_ENGINES``: each engine's name and base URL.
+    session : ClientSession
+        Shared client session for engine requests.
+    image_models : str, optional
+        ``LOKI_IMAGE_MODELS``: each image engine's name and published model id.
+        Empty by default.
+
     Raises
     ------
     ValueError
-        If an entry is malformed, repeats a name, or names an unknown engine type.
+        If an entry is malformed, repeats a name, names an unknown engine type,
+        or an image engine and its model id do not pair up.
 
     Examples
     --------
@@ -412,11 +465,9 @@ def parse_engines(spec: str, session: ClientSession) -> list[Engine]:
     >>> asyncio.run(demo())
     ['llama']
     """
-    engines = []
-    for entry in filter(None, (part.strip() for part in spec.split(","))):
-        name, sep, url = entry.partition("=")
-        if not sep or not url:
-            raise ValueError(f"engine entry {entry!r} is not name=url")
+    models = dict(_pairs(image_models))
+    engines: list[Engine] = []
+    for name, url in _pairs(spec):
         kind = name.partition("-")[0]
         if kind not in ENGINE_TYPES:
             expected = ", ".join(ENGINE_TYPES)
@@ -425,9 +476,18 @@ def parse_engines(spec: str, session: ClientSession) -> list[Engine]:
             )
         if any(engine.name == name for engine in engines):
             raise ValueError(f"engine {name!r} is listed twice")
-        engines.append(ENGINE_TYPES[kind](name, url.rstrip("/"), session))
+
+        # Give an image engine the model id it publishes
+        if kind == "image":
+            if name not in models:
+                raise ValueError(f"image engine {name!r} has no model id in LOKI_IMAGE_MODELS")
+            engines.append(ImageEngine(name, url.rstrip("/"), session, models.pop(name)))
+        else:
+            engines.append(ENGINE_TYPES[kind](name, url.rstrip("/"), session))
     if not engines:
         raise ValueError("no engines configured")
+    if models:
+        raise ValueError(f"LOKI_IMAGE_MODELS names unknown engines: {', '.join(models)}")
     return engines
 
 
@@ -435,10 +495,11 @@ def main() -> None:
     """Serve the gateway on port 8080 with engines from ``LOKI_ENGINES``."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     spec = os.environ.get("LOKI_ENGINES", "")
+    image_models = os.environ.get("LOKI_IMAGE_MODELS", "")
 
     async def factory() -> web.Application:
         session = ClientSession(timeout=ClientTimeout(total=None, sock_connect=10))
-        app = build_app(parse_engines(spec, session))
+        app = build_app(parse_engines(spec, session, image_models))
 
         async def close_session(_: web.Application) -> None:
             await session.close()

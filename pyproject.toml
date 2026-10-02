@@ -58,12 +58,12 @@ convention = "numpy"
 
 [tool.pytest.ini_options]
 # Container entry scripts are standalone modules, not part of the loki package
-pythonpath = ["gateway", "strata"]
+pythonpath = ["gateway", "strata", "image"]
 asyncio_mode = "auto"
 
 [tool.pyright]
 pythonVersion = "3.11"
 typeCheckingMode = "standard"
-include = ["loki", "tools", "gateway", "strata"]
+include = ["loki", "tools", "gateway", "strata", "image"]
 venvPath = "."
 venv = ".venv"

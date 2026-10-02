@@ -103,7 +103,7 @@ def test_update_skips_build_when_images_current(mocker):
 
 
 def test_update_writes_generated_files_before_compose(mocker, tmp_path, missing_services):
-    """Update refreshes .env and compose.strata.yaml before its first Compose call."""
+    """Update refreshes .env and compose.engines.yaml before its first Compose call."""
     mocker.patch("loki.cli.upgrade_packages", return_value=True)
     missing_services.return_value = ["llama"]
     seen = []
@@ -111,7 +111,7 @@ def test_update_writes_generated_files_before_compose(mocker, tmp_path, missing_
     def _record(cmd, *_, **__):
         if cmd[:2] == ["docker", "compose"]:
             seen.append(
-                ((tmp_path / ".env").is_file(), (tmp_path / "compose.strata.yaml").is_file())
+                ((tmp_path / ".env").is_file(), (tmp_path / "compose.engines.yaml").is_file())
             )
         return _completed()
 

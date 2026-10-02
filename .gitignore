@@ -214,7 +214,7 @@ config.yaml
 Caddyfile
 .env
 models.ini
-compose.strata.yaml
+compose.engines.yaml
 
 # Runtime data
 data/

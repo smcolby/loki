@@ -7,7 +7,7 @@ replaces ``loki.cli._missing_services`` with a stub.
 import subprocess
 
 from loki.cli import _build_services, _missing_services
-from loki.config import gateway_tag
+from loki.config import ImageConfig, ImageEngineConfig, gateway_tag
 
 LLAMA = "loki-llama:gfx1100-rocm7.2.4-abc123"
 STRATA = "loki-strata:gfx1100-rocm7.10.0a20251120-1678de333d0e0711bc414ad992b640e1a37dd814"
@@ -71,6 +71,31 @@ def test_build_services_builds_strata_through_its_first_engine(
 
     assert _build_services(sample_config, ["gateway", "strata"]) is True
     assert mock_run.call_args.args[0][-3:] == ["build", "gateway", "strata-qwen"]
+
+
+def test_build_services_builds_image_through_its_first_engine(mocker, sample_config):
+    """The shared sd-server image is built once, through the first image engine's service."""
+    sample_config.image = ImageConfig(
+        engines={name: ImageEngineConfig(model=name) for name in ("qwen", "flux")}
+    )
+    mock_run = mocker.patch(
+        "loki.cli.subprocess.run",
+        autospec=True,
+        return_value=subprocess.CompletedProcess(args=[], returncode=0),
+    )
+
+    assert _build_services(sample_config, ["image"]) is True
+    assert mock_run.call_args.args[0][-2:] == ["build", "image-qwen"]
+
+
+def test_missing_services_includes_image_only_with_engines(mocker, sample_config):
+    """The sd-server image is checked only when image engines are configured."""
+    _inspect(mocker, set())
+
+    assert "image" not in _missing_services(sample_config)
+
+    sample_config.image = ImageConfig(engines={"qwen": ImageEngineConfig(model="q")})
+    assert _missing_services(sample_config) == ["gateway", "llama", "image"]
 
 
 def test_build_services_reports_failure(mocker, sample_config):

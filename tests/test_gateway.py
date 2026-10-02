@@ -29,6 +29,7 @@ class FakeEngine:
         app.router.add_post("/models/unload", self.unload_llama)
         app.router.add_post("/unload", self.unload_strata)
         app.router.add_post("/v1/chat/completions", self.chat)
+        app.router.add_post("/v1/images/generations", self.generate)
         return app
 
     async def list_models(self, _: web.Request) -> web.Response:
@@ -73,6 +74,14 @@ class FakeEngine:
         await response.write_eof()
         return response
 
+    async def generate(self, request: web.Request) -> web.Response:
+        """Start the model like the image supervisor and return one sd-server style image."""
+        body = await request.json()
+        self.bodies.append(body)
+        self.calls.append(f"generate:{body['model']}")
+        self.loaded.add(body["model"])
+        return web.json_response({"created": 0, "data": [{"b64_json": "aW1n"}]})
+
 
 @pytest.fixture(autouse=True)
 def fast_polling(monkeypatch):
@@ -94,16 +103,22 @@ def strata():
 
 @pytest.fixture
 async def make_client(aiohttp_client, aiohttp_server):
-    """Return a factory that starts a gateway over ``name=FakeEngine-or-url`` pairs."""
+    """Return a factory that starts a gateway over ``name=FakeEngine-or-url`` pairs.
+
+    An image engine publishes its fake's first model as its model id.
+    """
     session = ClientSession()
 
     async def make(**engines: FakeEngine | str):
-        parts = []
+        parts, image_models = [], []
         for name, engine in engines.items():
             if isinstance(engine, FakeEngine):
+                if name.startswith("image"):
+                    image_models.append(f"{name}={engine.models[0]}")
                 engine = (await aiohttp_server(engine.app())).make_url("")
             parts.append(f"{name}={engine}")
-        return await aiohttp_client(gw.build_app(gw.parse_engines(",".join(parts), session)))
+        built = gw.parse_engines(",".join(parts), session, ",".join(image_models))
+        return await aiohttp_client(gw.build_app(built))
 
     yield make
     await session.close()
@@ -118,6 +133,11 @@ async def client(make_client, llama, strata):
 def _chat(model: str) -> dict:
     """Build a minimal streaming chat request body."""
     return {"model": model, "messages": [{"role": "user", "content": "hi"}], "stream": True}
+
+
+def _generate(model: str) -> dict:
+    """Build a minimal image generation request body."""
+    return {"model": model, "prompt": "a fox", "size": "512x512"}
 
 
 async def _complete(client, model: str) -> bytes:
@@ -194,6 +214,53 @@ async def test_other_engine_waits_for_in_flight_stream(client, llama, strata):
     await second
     assert llama.calls == ["chat:qwen", "unload:qwen"]
     assert strata.calls == ["chat:flash"]
+
+
+async def test_image_engine_serves_generations_but_stays_unlisted(make_client, llama):
+    """An image model routes generations and is absent from the chat model list."""
+    image = FakeEngine(["qwen-image"])
+    client = await make_client(llama=llama, **{"image-qwen": image})
+
+    listing = await (await client.get("/v1/models")).json()
+    response = await client.post("/v1/images/generations", json=_generate("qwen-image"))
+
+    assert [m["id"] for m in listing["data"]] == ["qwen", "gemma"]
+    assert response.status == 200
+    assert (await response.json())["data"] == [{"b64_json": "aW1n"}]
+    assert image.bodies == [_generate("qwen-image")]
+
+
+async def test_image_engine_swaps_with_text_engines(make_client, llama):
+    """Generating an image takes the GPU from llama, and the next chat takes it back."""
+    image = FakeEngine(["qwen-image"])
+    client = await make_client(llama=llama, **{"image-qwen": image})
+
+    await _complete(client, "qwen")
+    await client.post("/v1/images/generations", json=_generate("qwen-image"))
+    await _complete(client, "gemma")
+
+    assert llama.calls == ["chat:qwen", "unload:qwen", "chat:gemma"]
+    assert image.calls == ["generate:qwen-image", "unload"]
+
+
+@pytest.mark.parametrize(
+    ("path", "body", "model"),
+    [
+        ("/v1/chat/completions", _chat("qwen-image"), "qwen-image"),
+        ("/v1/images/generations", _generate("qwen"), "qwen"),
+    ],
+    ids=["chat-to-image", "image-to-chat"],
+)
+async def test_wrong_path_for_model_returns_400(make_client, llama, path, body, model):
+    """A model requested on a path its engine does not serve fails before any swap."""
+    image = FakeEngine(["qwen-image"])
+    client = await make_client(llama=llama, **{"image-qwen": image})
+
+    response = await client.post(path, json=body)
+
+    assert response.status == 400
+    assert f"model {model!r} does not serve {path}" in (await response.json())["error"]["message"]
+    assert llama.calls == image.calls == []
 
 
 @pytest.mark.parametrize(
@@ -282,7 +349,7 @@ async def test_health_reports_engine_states(client):
     ("spec", "message"),
     [
         ("", "no engines configured"),
-        ("llama", "is not name=url"),
+        ("llama", "is not name=value"),
         ("vllm=http://x", "unknown engine type 'vllm'"),
         ("vllm-strata=http://x", "unknown engine type 'vllm'"),
         ("strata=http://a,strata=http://b", "listed twice"),
@@ -294,3 +361,19 @@ async def test_parse_engines_rejects_bad_spec(spec, message):
     async with ClientSession() as session:
         with pytest.raises(ValueError, match=message):
             gw.parse_engines(spec, session)
+
+
+@pytest.mark.parametrize(
+    ("spec", "image_models", "message"),
+    [
+        ("image-qwen=http://x", "", "has no model id"),
+        ("llama=http://x", "image-qwen=q", "names unknown engines: image-qwen"),
+        ("image-qwen=http://x", "image-qwen", "is not name=value"),
+    ],
+    ids=["missing-id", "extra-id", "malformed-id"],
+)
+async def test_parse_engines_pairs_image_engines_with_ids(spec, image_models, message):
+    """Every image engine needs exactly one LOKI_IMAGE_MODELS entry, and vice versa."""
+    async with ClientSession() as session:
+        with pytest.raises(ValueError, match=message):
+            gw.parse_engines(spec, session, image_models)

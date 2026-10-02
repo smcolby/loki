@@ -11,7 +11,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # Only accurate for editable installs; kept for backward-compatibility with tests
 REPO_ROOT = Path(__file__).parent.parent
 
-STRATA_ENGINE_NAME = re.compile(r"[a-z0-9][a-z0-9_-]*")
+ENGINE_NAME = re.compile(r"[a-z0-9][a-z0-9_-]*")
+MODEL_ID = re.compile(r"[A-Za-z0-9._:/-]+")
 
 
 def _default_root() -> Path:
@@ -119,6 +120,15 @@ class LlamaConfig(BaseModel):
         return value.expanduser().absolute()
 
 
+def _check_engine_name(kind: str, name: str) -> None:
+    """Raise ValueError unless ``name`` can form a Compose service and container name."""
+    if not ENGINE_NAME.fullmatch(name):
+        raise ValueError(
+            f"{kind} engine name {name!r} must be lowercase letters, digits, "
+            "'_' or '-', starting with a letter or digit"
+        )
+
+
 class StrataConfig(BaseModel):
     """Settings for the optional Strata containers and the models they serve.
 
@@ -152,11 +162,7 @@ class StrataConfig(BaseModel):
     def _valid_engines(cls, value: dict[str, str]) -> dict[str, str]:
         """Reject names unusable in a service name and configs outside ``data_dir``."""
         for name, config_file in value.items():
-            if not STRATA_ENGINE_NAME.fullmatch(name):
-                raise ValueError(
-                    f"Strata engine name {name!r} must be lowercase letters, digits, "
-                    "'_' or '-', starting with a letter or digit"
-                )
+            _check_engine_name("Strata", name)
             path = Path(config_file)
             if path.is_absolute() or ".." in path.parts:
                 raise ValueError(
@@ -175,6 +181,82 @@ class StrataConfig(BaseModel):
         return {f"strata-{name}": self.data_dir / file for name, file in self.engines.items()}
 
 
+class ImageEngineConfig(BaseModel):
+    """One image generation engine: an sd-server container serving one model.
+
+    Attributes
+    ----------
+    model : str
+        Model id clients request. The gateway publishes it in place of
+        sd-server's fixed ``sd-cpp-local``.
+    args : list of str
+        sd-server arguments naming the model files (absolute paths inside
+        ``models_dir``) and the generation defaults.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    model: str
+    args: list[str] = []
+
+    @field_validator("model")
+    @classmethod
+    def _valid_model(cls, value: str) -> str:
+        """Reject ids that would break the gateway's ``name=model`` list."""
+        if not MODEL_ID.fullmatch(value):
+            raise ValueError(
+                f"image model id {value!r} must be letters, digits, '.', '_', ':', '/' or '-'"
+            )
+        return value
+
+
+class ImageConfig(BaseModel):
+    """Settings for the optional stable-diffusion.cpp containers that generate images.
+
+    Attributes
+    ----------
+    engines : dict of str to ImageEngineConfig
+        Engine name to its model id and sd-server arguments. Each entry runs
+        one container (Compose service ``image-<name>``); an empty mapping
+        leaves image generation out of the stack.
+    models_dir : Path
+        Directory holding the model files the engines name. Mounted read-only
+        into every image container at the same absolute path.
+    ref : str
+        stable-diffusion.cpp commit the image is built from.
+    gpu_targets : str
+        AMD GPU architecture the server is compiled for (e.g. ``"gfx1100"``).
+    rocm_version : str
+        ROCm release of the build toolchain and bundled runtime libraries.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    engines: dict[str, ImageEngineConfig] = {}
+    models_dir: Path = Field(default=Path("~/.llms"), validate_default=True)
+    ref: str = "3f8527a46c54ecf4cb4ed6003da8e8982283c73c"
+    gpu_targets: str = "gfx1100"
+    rocm_version: str = "7.2.4"
+
+    @field_validator("engines")
+    @classmethod
+    def _valid_engines(cls, value: dict[str, ImageEngineConfig]) -> dict[str, ImageEngineConfig]:
+        """Reject names unusable in a service name."""
+        for name in value:
+            _check_engine_name("Image", name)
+        return value
+
+    @field_validator("models_dir")
+    @classmethod
+    def _absolute_models_dir(cls, value: Path) -> Path:
+        """Expand ``~`` and anchor relative paths so the container mount matches the host."""
+        return value.expanduser().absolute()
+
+    def services(self) -> dict[str, ImageEngineConfig]:
+        """Return each engine's Compose service name and its settings."""
+        return {f"image-{name}": engine for name, engine in self.engines.items()}
+
+
 class LokiConfig(BaseModel):
     """Top-level configuration for the loki stack.
 
@@ -188,6 +270,8 @@ class LokiConfig(BaseModel):
         llama-server image and model settings.
     strata : StrataConfig
         Strata image and model settings.
+    image : ImageConfig
+        Image generation engine settings.
     kiwix_files : list of KiwixFile
         ZIM files to download during setup.
     """
@@ -198,11 +282,12 @@ class LokiConfig(BaseModel):
     ports: PortsConfig = PortsConfig()
     llama: LlamaConfig = Field(default_factory=LlamaConfig)
     strata: StrataConfig = Field(default_factory=StrataConfig)
+    image: ImageConfig = Field(default_factory=ImageConfig)
     kiwix_files: list[KiwixFile] = []
 
     def engine_services(self) -> list[str]:
         """Return the Compose services that serve models, in gateway listing order."""
-        return ["llama", *self.strata.services()]
+        return ["llama", *self.strata.services(), *self.image.services()]
 
 
 def load_config(path: Path | None = None) -> LokiConfig:
@@ -305,15 +390,15 @@ def models_preset_path() -> Path:
     return _default_root() / "models.ini"
 
 
-def strata_compose_path() -> Path:
-    """Return the path to the generated Compose file for Strata engines under ``LOKI_ROOT``.
+def engines_compose_path() -> Path:
+    """Return the path to the generated Compose file for Strata and image engines.
 
     Returns
     -------
     Path
-        ``<LOKI_ROOT>/compose.strata.yaml``
+        ``<LOKI_ROOT>/compose.engines.yaml``
     """
-    return _default_root() / "compose.strata.yaml"
+    return _default_root() / "compose.engines.yaml"
 
 
 GATEWAY_SOURCES = ("Dockerfile", "requirements.txt", "gateway.py")
@@ -370,12 +455,13 @@ def image_names(config: LokiConfig, gateway: str) -> dict[str, str]:
     Returns
     -------
     dict of str to str
-        Service name (``llama``, ``strata``, ``gateway``) to image name.
+        Service name (``llama``, ``strata``, ``image``, ``gateway``) to image name.
     """
-    llama, strata = config.llama, config.strata
+    llama, strata, image = config.llama, config.strata, config.image
     return {
         "llama": f"loki-llama:{llama.gpu_targets}-rocm{llama.rocm_version}-{llama.ref}",
         "strata": f"loki-strata:{strata.gpu_targets}-rocm{strata.rocm_version}-{strata.ref}",
+        "image": f"loki-image:{image.gpu_targets}-rocm{image.rocm_version}-{image.ref}",
         "gateway": f"loki-gateway:{gateway}",
     }
 
@@ -418,12 +504,16 @@ def build_env_file(config: LokiConfig, images: dict[str, str]) -> str:
     """
     ports, llama = config.ports, config.llama
     engines = ",".join(f"{name}=http://{name}:8080" for name in config.engine_services())
+    image_models = ",".join(
+        f"{name}={engine.model}" for name, engine in config.image.services().items()
+    )
     return (
         "# Generated by loki from config.yaml; do not edit by hand.\n"
         f"CADDY_PORT={ports.caddy}\n"
         f"KIWIX_PORT={ports.kiwix}\n"
         f"API_PORT={ports.api}\n"
         f"LOKI_ENGINES={engines}\n"
+        f"LOKI_IMAGE_MODELS={image_models}\n"
         f"GATEWAY_IMAGE={images['gateway']}\n"
         f"LLAMA_IMAGE={images['llama']}\n"
         f"LLAMA_MODELS_DIR={llama.models_dir}\n"
@@ -434,40 +524,43 @@ def build_env_file(config: LokiConfig, images: dict[str, str]) -> str:
     )
 
 
-def build_strata_compose(config: LokiConfig, image: str, context: Path) -> str:
-    """Return a Compose file with one service per configured Strata engine.
+def build_engines_compose(config: LokiConfig, images: dict[str, str], root: Path) -> str:
+    """Return a Compose file with one service per configured Strata and image engine.
 
-    Every service runs the same image and mounts ``data_dir`` read-only at its
-    host path, so paths inside an engine config resolve unchanged; only the
-    engine config mounted at ``/etc/strata/strata.json`` differs.
+    Every Strata service runs the same image and mounts ``data_dir`` read-only
+    at its host path, so paths inside an engine config resolve unchanged; only
+    the engine config mounted at ``/etc/strata/strata.json`` differs. Every
+    image service runs the sd-server image, mounts ``models_dir`` the same way,
+    and passes its engine's arguments as the container command.
 
     Parameters
     ----------
     config : LokiConfig
-        Configuration whose ``strata`` section lists the engines.
-    image : str
-        Strata image name from :func:`image_names`.
-    context : Path
-        Build context holding Strata's Dockerfile.
+        Configuration whose ``strata`` and ``image`` sections list the engines.
+    images : dict of str to str
+        Image names from :func:`image_names`.
+    root : Path
+        Repository root holding the ``strata`` and ``image`` build contexts.
 
     Returns
     -------
     str
         Compose YAML; its ``services`` mapping is empty when no engine is configured.
     """
+    # Give each service its own dicts so the YAML carries no anchors
     strata = config.strata
     data_dir = str(strata.data_dir)
-    args = {
-        "STRATA_REF": strata.ref,
-        "GPU_TARGETS": strata.gpu_targets,
-        "ROCM_VERSION": strata.rocm_version,
-    }
-
-    # Give each service its own dicts so the YAML carries no anchors
-    services = {
+    services: dict[str, dict[str, object]] = {
         service: {
-            "build": {"context": str(context), "args": dict(args)},
-            "image": image,
+            "build": {
+                "context": str(root / "strata"),
+                "args": {
+                    "STRATA_REF": strata.ref,
+                    "GPU_TARGETS": strata.gpu_targets,
+                    "ROCM_VERSION": strata.rocm_version,
+                },
+            },
+            "image": images["strata"],
             "container_name": f"loki-{service}",
             "restart": "unless-stopped",
             "devices": ["/dev/kfd", "/dev/dri"],
@@ -487,5 +580,29 @@ def build_strata_compose(config: LokiConfig, image: str, context: Path) -> str:
         }
         for service, config_file in strata.services().items()
     }
+
+    # Add one sd-server container per image engine
+    image = config.image
+    models_dir = str(image.models_dir)
+    for service, engine in image.services().items():
+        services[service] = {
+            "build": {
+                "context": str(root / "image"),
+                "args": {
+                    "SD_CPP_REF": image.ref,
+                    "GPU_TARGETS": image.gpu_targets,
+                    "ROCM_VERSION": image.rocm_version,
+                },
+            },
+            "image": images["image"],
+            "container_name": f"loki-{service}",
+            "restart": "unless-stopped",
+            "devices": ["/dev/kfd", "/dev/dri"],
+            "security_opt": ["seccomp=unconfined"],
+            "volumes": [f"{models_dir}:{models_dir}:ro"],
+            "command": list(engine.args),
+            "networks": ["loki-net"],
+        }
+
     header = "# Generated by loki from config.yaml; do not edit by hand.\n"
     return header + yaml.safe_dump({"services": services}, sort_keys=False)

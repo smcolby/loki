@@ -2,7 +2,7 @@
 
 # `loki`: local offline knowledge index
 
-`loki` is a self-hosted AI stack that gives you a private, fully offline knowledge base powered by a local LLM. It combines [llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server` (local inference), [Open WebUI](https://openwebui.com) (chat interface), and [Kiwix](https://kiwix.org) (offline Wikipedia and other knowledge archives), all orchestrated with Docker Compose and managed through a single CLI. An optional second engine, [Strata](https://github.com/Niko1221/Strata), serves Qwen3.8-Flash-Next behind the same API.
+`loki` is a self-hosted AI stack that gives you a private, fully offline knowledge base powered by a local LLM. It combines [llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server` (local inference), [Open WebUI](https://openwebui.com) (chat interface), and [Kiwix](https://kiwix.org) (offline Wikipedia and other knowledge archives), all orchestrated with Docker Compose and managed through a single CLI. An optional second engine, [Strata](https://github.com/Niko1221/Strata), serves Qwen3.8-Flash-Next behind the same API, and an optional [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) engine generates images.
 
 Whether you're working air-gapped, want to keep queries off the cloud, or just want an always-available research assistant, `loki` runs entirely on your own hardware with no external dependencies at runtime.
 
@@ -57,6 +57,13 @@ strata:
   gpu_targets: gfx1100
   rocm_version: 7.10.0a20251120                     # TheRock ROCm wheels.
 
+image:
+  engines: {}                                       # Engine name -> model id and sd-server args.
+  models_dir: ~/.llms                               # Mounted read-only into every image engine.
+  ref: 3f8527a46c54ecf4cb4ed6003da8e8982283c73c     # stable-diffusion.cpp commit to build.
+  gpu_targets: gfx1100
+  rocm_version: 7.2.4
+
 kiwix_files:
   - name: wikipedia_en_all_nopic
     url: https://download.kiwix.org/zim/wikipedia/wikipedia_en_all_nopic_2025-12.zim
@@ -64,7 +71,7 @@ kiwix_files:
 
 `loki/config.default.yaml` lists the full default `llama.defaults` block. Keys under `defaults` are `llama-server` long option names without the leading dashes. Quote `"on"` and `"off"` so YAML keeps them as strings.
 
-Edit `kiwix_files` (datasets [here](https://download.kiwix.org/zim/)) to match what you want downloaded. `loki` generates the `Caddyfile`, `.env`, `models.ini`, and `compose.strata.yaml`; do not edit those files by hand.
+Edit `kiwix_files` (datasets [here](https://download.kiwix.org/zim/)) to match what you want downloaded. `loki` generates the `Caddyfile`, `.env`, `models.ini`, and `compose.engines.yaml`; do not edit those files by hand.
 
 ## Adding models
 
@@ -97,7 +104,7 @@ strata:
     swift: swift.json
 ```
 
-Each engine runs in its own container as Compose service `strata-<name>`, defined in the generated `compose.strata.yaml`. Engine names use lowercase letters, digits, `_`, and `-`. A config file looks like this:
+Each engine runs in its own container as Compose service `strata-<name>`, defined in the generated `compose.engines.yaml`. Engine names use lowercase letters, digits, `_`, and `-`. A config file looks like this:
 
 ```json
 {
@@ -111,6 +118,36 @@ Each engine runs in its own container as Compose service `strata-<name>`, define
 `args` are Strata engine arguments, `model_name` is the model id clients request, and `env` (optional) sets engine environment variables. Use absolute paths inside `data_dir`, which is mounted read-only at the same path. The image supplies the engine binary, its libraries, and a hipBLASLt tuning table for `gpu_targets`, so an engine config must not set `exe`, `cwd`, `lib_dirs`, `backend`, or `log`. `loki start` stops with an error if a listed engine config is missing. All engines share one image, and an engine that is not loaded holds no GPU memory and little host RAM.
 
 Only one engine holds the GPU at a time. The first request for a model on the other engine waits for in-flight requests to finish, unloads the current engine's models, and then loads the requested one.
+
+### Adding image generation
+
+An image engine runs stable-diffusion.cpp's `sd-server` for one image model. Each entry under `image.engines` names the engine, the model id clients request, and the `sd-server` arguments:
+
+```yaml
+image:
+  engines:
+    qwen:
+      model: qwen-image-2.1-q8_0
+      args:
+        - --diffusion-model
+        - /home/you/.llms/qwen-image-2.1/qwen-image-2.1-Q8_0.gguf
+        - --llm
+        - /home/you/.llms/qwen-image-2.1/Qwen3-VL-8B-Instruct-UD-Q4_K_XL.gguf
+        - --vae
+        - /home/you/.llms/qwen-image-2.1/qwen_image_2.1_vae_bf16.safetensors
+        - --params-backend
+        - disk
+        - --width
+        - "2528"
+        - --height
+        - "1696"
+```
+
+`--width` and `--height` set the size of a request that names none; both must be multiples of 32. Each engine runs as Compose service `image-<name>` (container `loki-image-<name>`) in `compose.engines.yaml`, with `models_dir` mounted read-only at the same path, so use absolute paths inside it. Model ids use letters, digits, `.`, `_`, `:`, `/`, and `-`. All image engines share one image. sd-server keeps about 1.6 GiB of GPU memory after a generation, so a supervisor in the image starts it on the first request and stops it when another engine needs the GPU; the arguments must not set `--listen-ip` or `--listen-port`.
+
+Image models answer `POST /v1/images/generations` on the model API and stay out of `/v1/models`, which chat clients read as their model list. A chat request for an image model, or an image request for a chat model, fails with HTTP 400. An image request takes the GPU like any other engine swap: it waits for in-flight text requests, unloads the text engines, and then generates. The next chat request stops sd-server and reloads its model.
+
+To generate images from Open WebUI, open **Admin Panel > Settings > Images**, choose the OpenAI engine, set the base URL to `http://gateway:8080/v1`, enter any API key, set the model to the image model id, and set the image size (Open WebUI always sends one, so the engine's default applies only to other clients).
 
 ## Setup
 
@@ -128,7 +165,7 @@ This will:
 4. **Check for AMD GPU devices** (`/dev/kfd` and `/dev/dri`) and warn if the `amdgpu` driver is missing.
 5. **Add `LOKI_ROOT` to your shell profile** so `loki` commands work from any directory.
 6. **Generate the `Caddyfile`, `.env`, and `models.ini`** from your configuration and model presets.
-7. **Build missing local images**: the API gateway, `llama-server` (10 to 20 minutes), and Strata when any engine is configured.
+7. **Build missing local images**: the API gateway, `llama-server` (10 to 20 minutes), and the Strata and image engines when any is configured.
 8. **Download ZIM files** listed in `kiwix_files` using aria2.
 
 Steps that change your system prompt `[Y/n]`. Skipped steps must be completed manually before the stack will function correctly; `loki start` builds any image step 7 skipped.
@@ -145,7 +182,7 @@ loki cleanup  Remove ZIM files and local images no longer matching config.
 
 After `loki start`, Open WebUI is available at `http://loki.local` (or whichever `url` you configured).
 
-Local image tags name every build input: `loki-llama:<gpu_targets>-rocm<rocm_version>-<ref>`, `loki-strata:<gpu_targets>-rocm<rocm_version>-<ref>`, and `loki-gateway:<hash of the gateway sources>`. `loki update` builds only images whose tag is missing, so an unchanged config rebuilds nothing. To pick up a new llama.cpp release, set `llama.ref` to the new commit and run `loki update`. `loki cleanup` then offers to remove the image built for the previous commit.
+Local image tags name every build input: `loki-llama:<gpu_targets>-rocm<rocm_version>-<ref>`, `loki-strata:<gpu_targets>-rocm<rocm_version>-<ref>`, `loki-image:<gpu_targets>-rocm<rocm_version>-<ref>`, and `loki-gateway:<hash of the gateway sources>`. `loki update` builds only images whose tag is missing, so an unchanged config rebuilds nothing. To pick up a new llama.cpp release, set `llama.ref` to the new commit and run `loki update`. `loki cleanup` then offers to remove the image built for the previous commit.
 
 ## Connecting other clients
 

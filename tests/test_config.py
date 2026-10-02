@@ -9,21 +9,23 @@ from pydantic import ValidationError
 from loki.config import (
     DEFAULT_PRESET_SETTINGS,
     REPO_ROOT,
+    ImageConfig,
+    ImageEngineConfig,
     LlamaConfig,
     LokiConfig,
     PortsConfig,
     StrataConfig,
     build_caddyfile,
+    build_engines_compose,
     build_env_file,
-    build_strata_compose,
     caddyfile_path,
+    engines_compose_path,
     env_file_path,
     gateway_tag,
     image_names,
     kiwix_dir,
     load_config,
     models_preset_path,
-    strata_compose_path,
 )
 
 
@@ -235,7 +237,15 @@ def test_ports_config_full_override():
     assert ports.api == 9000
 
 
-IMAGES = {"llama": "loki-llama:x", "strata": "loki-strata:y", "gateway": "loki-gateway:z"}
+IMAGES = {
+    "llama": "loki-llama:x",
+    "strata": "loki-strata:y",
+    "image": "loki-image:w",
+    "gateway": "loki-gateway:z",
+}
+QWEN_IMAGE = ImageEngineConfig(
+    model="qwen-image-2.1-q8_0", args=["--diffusion-model", "/m/q.gguf", "--steps", "20"]
+)
 
 
 def test_build_env_file_contains_all_ports():
@@ -276,11 +286,12 @@ def test_build_env_file_contains_llama_build_settings(tmp_path):
     assert "GATEWAY_IMAGE=loki-gateway:z" in lines
 
 
-def test_build_env_file_without_strata_routes_only_llama():
-    """Without Strata engines, the gateway sees only llama."""
+def test_build_env_file_without_engines_routes_only_llama():
+    """Without Strata or image engines, the gateway sees only llama."""
     lines = build_env_file(LokiConfig(), IMAGES).splitlines()
 
     assert "LOKI_ENGINES=llama=http://llama:8080" in lines
+    assert "LOKI_IMAGE_MODELS=" in lines
 
 
 def test_build_env_file_routes_every_strata_engine(tmp_path):
@@ -295,7 +306,17 @@ def test_build_env_file_routes_every_strata_engine(tmp_path):
     ) in lines
 
 
-def test_build_strata_compose_runs_one_container_per_engine(tmp_path):
+def test_build_env_file_routes_image_engines_with_their_model_ids():
+    """Image engines follow Strata in the routes, and each publishes its configured id."""
+    image = ImageConfig(engines={"qwen": QWEN_IMAGE})
+
+    lines = build_env_file(LokiConfig(image=image), IMAGES).splitlines()
+
+    assert "LOKI_ENGINES=llama=http://llama:8080,image-qwen=http://image-qwen:8080" in lines
+    assert "LOKI_IMAGE_MODELS=image-qwen=qwen-image-2.1-q8_0" in lines
+
+
+def test_build_engines_compose_runs_one_container_per_strata_engine(tmp_path):
     """Each engine gets a service on the shared image that mounts its own engine config."""
     strata = StrataConfig(
         engines={"qwen": "qwen.json", "swift": "configs/swift.json"},
@@ -305,7 +326,7 @@ def test_build_strata_compose_runs_one_container_per_engine(tmp_path):
         rocm_version="7.10",
     )
 
-    text = build_strata_compose(LokiConfig(strata=strata), "loki-strata:y", tmp_path / "ctx")
+    text = build_engines_compose(LokiConfig(strata=strata), IMAGES, tmp_path / "root")
     services = yaml.safe_load(text)["services"]
 
     assert list(services) == ["strata-qwen", "strata-swift"]
@@ -313,7 +334,7 @@ def test_build_strata_compose_runs_one_container_per_engine(tmp_path):
     assert swift["image"] == "loki-strata:y"
     assert swift["container_name"] == "loki-strata-swift"
     assert swift["build"] == {
-        "context": str(tmp_path / "ctx"),
+        "context": str(tmp_path / "root" / "strata"),
         "args": {"STRATA_REF": "cafe", "GPU_TARGETS": "gfx1100", "ROCM_VERSION": "7.10"},
     }
     assert swift["volumes"][0] == f"{tmp_path}:{tmp_path}:ro"
@@ -323,9 +344,35 @@ def test_build_strata_compose_runs_one_container_per_engine(tmp_path):
     assert "&" not in text
 
 
-def test_build_strata_compose_without_engines_has_no_services():
-    """Without Strata engines the file still parses, with no services."""
-    text = build_strata_compose(LokiConfig(), "loki-strata:y", REPO_ROOT / "strata")
+def test_build_engines_compose_runs_image_engines_with_their_args(tmp_path):
+    """An image engine runs sd-server with its arguments and the models directory mounted."""
+    image = ImageConfig(
+        engines={"qwen": QWEN_IMAGE},
+        models_dir=tmp_path,
+        ref="beef",
+        gpu_targets="gfx1201",
+        rocm_version="7.2.4",
+    )
+
+    text = build_engines_compose(LokiConfig(image=image), IMAGES, tmp_path / "root")
+    services = yaml.safe_load(text)["services"]
+
+    assert list(services) == ["image-qwen"]
+    qwen = services["image-qwen"]
+    assert qwen["image"] == "loki-image:w"
+    assert qwen["container_name"] == "loki-image-qwen"
+    assert qwen["build"] == {
+        "context": str(tmp_path / "root" / "image"),
+        "args": {"SD_CPP_REF": "beef", "GPU_TARGETS": "gfx1201", "ROCM_VERSION": "7.2.4"},
+    }
+    assert qwen["command"] == ["--diffusion-model", "/m/q.gguf", "--steps", "20"]
+    assert qwen["volumes"] == [f"{tmp_path}:{tmp_path}:ro"]
+    assert qwen["devices"] == ["/dev/kfd", "/dev/dri"]
+
+
+def test_build_engines_compose_without_engines_has_no_services(tmp_path):
+    """Without Strata or image engines the file still parses, with no services."""
+    text = build_engines_compose(LokiConfig(), IMAGES, tmp_path)
 
     assert yaml.safe_load(text) == {"services": {}}
 
@@ -346,16 +393,34 @@ def test_strata_rejects_bad_engines(engines, message):
         StrataConfig(engines=engines)
 
 
+@pytest.mark.parametrize(
+    ("engines", "message"),
+    [
+        ({"Qwen": {"model": "q"}}, "lowercase"),
+        ({"qwen": {"model": "a,b"}}, "image model id"),
+        ({"qwen": {"model": "a=b"}}, "image model id"),
+        ({"qwen": {}}, "model"),
+    ],
+    ids=["uppercase-name", "comma-id", "equals-id", "no-id"],
+)
+def test_image_rejects_bad_engines(engines, message):
+    """Engine names must fit a service name and model ids must fit the gateway's list."""
+    with pytest.raises(ValidationError, match=message):
+        ImageConfig.model_validate({"engines": engines})
+
+
 def test_image_names_carry_every_build_input():
     """Image tags name the GPU target, ROCm version, and commit, so a change names a new image."""
     config = LokiConfig(
         llama=LlamaConfig(ref="aaa", gpu_targets="gfx1201", rocm_version="7.2.4"),
         strata=StrataConfig(ref="bbb", gpu_targets="gfx1100", rocm_version="7.10.0a1"),
+        image=ImageConfig(ref="ccc", gpu_targets="gfx1030", rocm_version="7.2.3"),
     )
 
     assert image_names(config, "0123abcd") == {
         "llama": "loki-llama:gfx1201-rocm7.2.4-aaa",
         "strata": "loki-strata:gfx1100-rocm7.10.0a1-bbb",
+        "image": "loki-image:gfx1030-rocm7.2.3-ccc",
         "gateway": "loki-gateway:0123abcd",
     }
 
@@ -391,7 +456,7 @@ def test_env_file_path_is_under_loki_root(monkeypatch, tmp_path):
     assert env_file_path() == tmp_path / ".env"
 
 
-def test_strata_compose_path_is_under_loki_root(monkeypatch, tmp_path):
-    """strata_compose_path returns the generated Compose file inside LOKI_ROOT."""
+def test_engines_compose_path_is_under_loki_root(monkeypatch, tmp_path):
+    """engines_compose_path returns the generated Compose file inside LOKI_ROOT."""
     monkeypatch.setenv("LOKI_ROOT", str(tmp_path))
-    assert strata_compose_path() == tmp_path / "compose.strata.yaml"
+    assert engines_compose_path() == tmp_path / "compose.engines.yaml"

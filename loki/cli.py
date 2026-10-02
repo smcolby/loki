@@ -12,9 +12,10 @@ from loki.config import (
     LokiConfig,
     avahi_pid_file,
     build_caddyfile,
+    build_engines_compose,
     build_env_file,
-    build_strata_compose,
     caddyfile_path,
+    engines_compose_path,
     env_file_path,
     gateway_dir,
     gateway_tag,
@@ -23,7 +24,6 @@ from loki.config import (
     load_config,
     loki_root,
     models_preset_path,
-    strata_compose_path,
 )
 from loki.presets import PresetError, build_models_preset
 from loki.system import (
@@ -42,7 +42,7 @@ from loki.system import (
     upgrade_packages,
 )
 
-BUILT_SERVICES = ("gateway", "llama", "strata")
+BUILT_SERVICES = ("gateway", "llama", "strata", "image")
 
 
 def _require_tool(name: str) -> None:
@@ -65,7 +65,7 @@ def _require_tool(name: str) -> None:
 
 
 def _compose(*args: str) -> list[str]:
-    """Return a ``docker compose`` command over ``compose.yaml`` and the Strata services."""
+    """Return a ``docker compose`` command over ``compose.yaml`` and the generated engines."""
     root = loki_root()
     return [
         "docker",
@@ -75,7 +75,7 @@ def _compose(*args: str) -> list[str]:
         "-f",
         str(root / "compose.yaml"),
         "-f",
-        str(strata_compose_path()),
+        str(engines_compose_path()),
         *args,
     ]
 
@@ -88,17 +88,18 @@ def _images(config: LokiConfig) -> dict[str, str]:
 def _build_targets(config: LokiConfig) -> dict[str, str]:
     """Return the Compose service that builds each locally built image the stack needs.
 
-    Every Strata engine runs the same image, so the first engine's service builds it.
+    Every Strata engine runs one image and every image engine another, so the
+    first engine's service of each kind builds it.
     """
     targets = {"gateway": "gateway", "llama": "llama"}
-    strata = list(config.strata.services())
-    if strata:
-        targets["strata"] = strata[0]
+    for key, services in (("strata", config.strata.services()), ("image", config.image.services())):
+        if services:
+            targets[key] = next(iter(services))
     return targets
 
 
 def _missing_services(config: LokiConfig) -> list[str]:
-    """Return the needed local images (``gateway``, ``llama``, ``strata``) not yet built."""
+    """Return the keys of the needed local images that are not yet built."""
     images = _images(config)
     return [
         key
@@ -129,7 +130,7 @@ def _api_url(config: LokiConfig) -> str:
 
 
 def _write_generated_files(config: LokiConfig) -> bool:
-    """Write the Caddyfile, ``.env``, ``compose.strata.yaml``, and ``models.ini`` from ``config``.
+    """Write the Caddyfile, ``.env``, ``compose.engines.yaml``, and ``models.ini`` from ``config``.
 
     Parameters
     ----------
@@ -156,9 +157,7 @@ def _write_generated_files(config: LokiConfig) -> bool:
     images = _images(config)
     caddyfile_path().write_text(build_caddyfile(config.url))
     env_file_path().write_text(build_env_file(config, images))
-    strata_compose_path().write_text(
-        build_strata_compose(config, images["strata"], loki_root() / "strata")
-    )
+    engines_compose_path().write_text(build_engines_compose(config, images, loki_root()))
 
     # Collect every model preset under the models directory
     models_dir = config.llama.models_dir
@@ -231,8 +230,9 @@ def setup() -> None:
     Walks through config review, system-package installation (aria2,
     avahi-daemon, avahi-utils), Docker installation, an AMD GPU check, and the
     ``LOKI_ROOT`` shell-profile export. Then writes the Caddyfile, ``.env``,
-    ``compose.strata.yaml``, and ``models.ini``, offers to build any missing
-    local images (gateway, llama-server, and Strata when it has engines), and
+    ``compose.engines.yaml``, and ``models.ini``, offers to build any missing
+    local images (gateway, llama-server, and Strata or sd-server when they
+    have engines), and
     downloads any ZIM files listed
     in ``config.yaml``.
     """
@@ -352,7 +352,7 @@ def setup() -> None:
         if not missing:
             click.echo("\nLocal images already built.")
         elif click.confirm(
-            "\nBuild missing images now (llama-server and Strata take 10-30 minutes each)?\n  "
+            "\nBuild missing images now (each engine image takes 10-30 minutes)?\n  "
             + "\n  ".join(images[service] for service in missing)
             + "\n",
             default=True,
@@ -424,7 +424,7 @@ def update() -> None:
             err=True,
         )
 
-    # Generated files first, since every Compose call reads compose.strata.yaml
+    # Generated files first, since every Compose call reads compose.engines.yaml
     _require_tool("docker")
     config = load_config()
     if not _write_generated_files(config):

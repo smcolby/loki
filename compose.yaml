@@ -1,5 +1,5 @@
-# Strata engines come from compose.strata.yaml, which loki generates from config.yaml
-# and passes alongside this file.
+# Strata and image engines come from compose.engines.yaml, which loki generates from
+# config.yaml and passes alongside this file.
 services:
   gateway:
     # One API for every engine: merges model lists and hands the GPU to one engine at a time.
@@ -10,6 +10,7 @@ services:
     restart: unless-stopped
     environment:
       - LOKI_ENGINES=${LOKI_ENGINES:?run loki start to write .env}
+      - LOKI_IMAGE_MODELS=${LOKI_IMAGE_MODELS:-}
     ports:
       - "${API_PORT:-8090}:8080"
     depends_on:

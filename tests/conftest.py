@@ -37,7 +37,7 @@ def _isolate_paths(mocker, monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(home))
     mocker.patch("loki.cli.caddyfile_path", return_value=tmp_path / "Caddyfile")
     mocker.patch("loki.cli.env_file_path", return_value=tmp_path / ".env")
-    mocker.patch("loki.cli.strata_compose_path", return_value=tmp_path / "compose.strata.yaml")
+    mocker.patch("loki.cli.engines_compose_path", return_value=tmp_path / "compose.engines.yaml")
     mocker.patch("loki.cli.models_preset_path", return_value=tmp_path / "models.ini")
 
 

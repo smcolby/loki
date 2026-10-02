@@ -84,7 +84,7 @@ def test_start_writes_strata_services_and_routes(
 
     env = (tmp_path / ".env").read_text()
     assert "strata-qwen=http://strata-qwen:8080,strata-swift=http://strata-swift:8080\n" in env
-    services = yaml.safe_load((tmp_path / "compose.strata.yaml").read_text())["services"]
+    services = yaml.safe_load((tmp_path / "compose.engines.yaml").read_text())["services"]
     assert list(services) == ["strata-qwen", "strata-swift"]
     assert "Model API (llama, strata-qwen, strata-swift)" in result.output
 
@@ -107,7 +107,7 @@ def test_start_aborts_when_strata_config_missing(
 
 
 def test_start_uses_both_compose_files(mocker, sample_config, tmp_path):
-    """Every Compose call reads compose.yaml and the generated Strata file."""
+    """Every Compose call reads compose.yaml and the generated engines file."""
     mocker.patch("loki.cli.load_config", return_value=sample_config)
     mocker.patch("loki.cli.loki_root", return_value=tmp_path)
     mock_run = mocker.patch("loki.cli.subprocess.run", autospec=True)
@@ -116,7 +116,7 @@ def test_start_uses_both_compose_files(mocker, sample_config, tmp_path):
 
     cmd = mock_run.call_args_list[0].args[0]
     files = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "-f"]
-    assert files == [str(tmp_path / "compose.yaml"), str(tmp_path / "compose.strata.yaml")]
+    assert files == [str(tmp_path / "compose.yaml"), str(tmp_path / "compose.engines.yaml")]
 
 
 def test_start_exits_when_docker_not_found(mocker, sample_config):
