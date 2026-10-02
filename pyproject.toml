@@ -54,9 +54,13 @@ convention = "numpy"
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "D100", "D101", "D102", "D103", "D104"]
 
+[tool.pytest.ini_options]
+# Container entry scripts are standalone modules, not part of the loki package
+pythonpath = ["strata"]
+
 [tool.pyright]
 pythonVersion = "3.11"
 typeCheckingMode = "standard"
-include = ["loki", "tools"]
+include = ["loki", "tools", "strata"]
 venvPath = "."
 venv = ".venv"
