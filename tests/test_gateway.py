@@ -308,6 +308,31 @@ async def test_offline_engine_is_skipped_and_counts_as_unloaded(make_client, lla
     assert health["engines"] == {"llama": "loaded", "strata": "offline"}
 
 
+def _list_nothing(client, engine: FakeEngine) -> None:
+    """Make the fake list no models, as Strata does while it loads one."""
+    engine.models = []
+
+
+def _go_offline(client, engine: FakeEngine) -> None:
+    """Point the gateway's strata engine at a closed port, as during a container restart."""
+    strata_engine = next(e for e in client.app["gateway"].engines if e.name == "strata")
+    strata_engine.url = "http://127.0.0.1:9"
+
+
+@pytest.mark.parametrize("silence", [_list_nothing, _go_offline], ids=["empty", "unreachable"])
+async def test_engine_keeps_its_last_listing_while_silent(make_client, llama, strata, silence):
+    """A listed engine that stops listing keeps its models listed and routed to it."""
+    client = await make_client(llama=llama, strata=strata)
+    await client.get("/v1/models")
+    silence(client, strata)
+
+    models = await (await client.get("/v1/models")).json()
+    owner = await client.app["gateway"].owner("flash")
+
+    assert [m["id"] for m in models["data"]] == ["qwen", "gemma", "flash"]
+    assert owner is not None and owner.name == "strata"
+
+
 async def test_duplicate_model_id_is_an_error(make_client):
     """Two engines publishing one id fail loudly for listing and routing."""
     client = await make_client(llama=FakeEngine(["same"]), strata=FakeEngine(["same"]))

@@ -188,7 +188,7 @@ Local image tags name every build input: `loki-llama:<gpu_targets>-rocm<rocm_ver
 
 A gateway listens on the LAN at `http://loki.local:8090` without an API key and routes each request to the engine serving the requested model. It exposes:
 
-- An OpenAI-compatible API at `/v1` (`/v1/chat/completions`, `/v1/models`). `/v1/models` lists every engine's models, with the engine in `owned_by`. Clients that require a key accept any placeholder value.
+- An OpenAI-compatible API at `/v1` (`/v1/chat/completions`, `/v1/models`). `/v1/models` lists every engine's models, with the engine in `owned_by`. A model stays listed while its engine loads it or restarts, since Strata reports no models during a load. Clients that require a key accept any placeholder value.
 - An Anthropic-compatible `/v1/messages` endpoint, so Claude Code can use it by setting `ANTHROPIC_BASE_URL=http://loki.local:8090`.
 - `/health`, which reports each engine's state and which one holds the GPU.
 
