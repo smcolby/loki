@@ -54,7 +54,8 @@ image:
   #   qwen:
   #     model: qwen-image-2.1-q8_0
   #     args: [--diffusion-model, /home/you/.llms/qwen-image-2.1/qwen-image-2.1-Q8_0.gguf,
-  #            --llm, ..., --vae, ..., --params-backend, disk, --diffusion-fa]
+  #            --llm, ..., --llm_vision, ..., --vae, ..., --params-backend, disk, --diffusion-fa,
+  #            --strength, "1.0", --ref-image-args, vae_input_max_pixels=1048576]
   engines: {}
   models_dir: ~/.llms     # Holds the model files the engines name; mounted read-only
   ref: 3f8527a46c54ecf4cb4ed6003da8e8982283c73c  # stable-diffusion.cpp commit to build

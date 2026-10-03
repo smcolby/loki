@@ -133,21 +133,29 @@ image:
         - /home/you/.llms/qwen-image-2.1/qwen-image-2.1-Q8_0.gguf
         - --llm
         - /home/you/.llms/qwen-image-2.1/Qwen3-VL-8B-Instruct-UD-Q4_K_XL.gguf
+        - --llm_vision
+        - /home/you/.llms/qwen-image-2.1/Qwen3-VL-8B-Instruct-mmproj-F16.gguf
         - --vae
         - /home/you/.llms/qwen-image-2.1/qwen_image_2.1_vae_bf16.safetensors
         - --params-backend
         - disk
+        - --strength
+        - "1.0"
+        - --ref-image-args
+        - vae_input_max_pixels=1048576
         - --width
-        - "2528"
+        - "1920"
         - --height
-        - "1696"
+        - "1280"
 ```
 
-`--width` and `--height` set the size of a request that names none; both must be multiples of 32. Each engine runs as Compose service `image-<name>` (container `loki-image-<name>`) in `compose.engines.yaml`, with `models_dir` mounted read-only at the same path, so use absolute paths inside it. Model ids use letters, digits, `.`, `_`, `:`, `/`, and `-`. All image engines share one image. sd-server keeps about 1.6 GiB of GPU memory after a generation, so a supervisor in the image starts it on the first request and stops it when another engine needs the GPU; the arguments must not set `--listen-ip` or `--listen-port`.
+`--width` and `--height` set the size of a request that names none; both must be multiples of 32. `--llm_vision`, `--strength`, and `--ref-image-args` matter only for edits (below). Each engine runs as Compose service `image-<name>` (container `loki-image-<name>`) in `compose.engines.yaml`, with `models_dir` mounted read-only at the same path, so use absolute paths inside it. Model ids use letters, digits, `.`, `_`, `:`, `/`, and `-`. All image engines share one image. sd-server keeps about 1.6 GiB of GPU memory after a generation, so a supervisor in the image starts it on the first request and stops it when another engine needs the GPU; the arguments must not set `--listen-ip` or `--listen-port`.
 
-Image models answer `POST /v1/images/generations` on the model API and stay out of `/v1/models`, which chat clients read as their model list. A chat request for an image model, or an image request for a chat model, fails with HTTP 400. An image request takes the GPU like any other engine swap: it waits for in-flight text requests, unloads the text engines, and then generates. The next chat request stops sd-server and reloads its model.
+Image models answer `POST /v1/images/generations` and `POST /v1/images/edits` on the model API and stay out of `/v1/models`, which chat clients read as their model list. A chat request for an image model, or an image request for a chat model, fails with HTTP 400. An image request takes the GPU like any other engine swap: it waits for in-flight text requests, unloads the text engines, and then generates. The next chat request stops sd-server and reloads its model.
 
 To generate images from Open WebUI, open **Admin Panel > Settings > Images**, choose the OpenAI engine, set the base URL to `http://gateway:8080/v1`, enter any API key, set the model to the image model id, and set the image size (Open WebUI always sends one, so the engine's default applies only to other clients).
+
+Edits take reference images: `/v1/images/edits` is OpenAI's multipart form, with the images as `image[]` parts, and Qwen Image 2.1 accepts up to 10. Qwen Image reads them through its Qwen3-VL text encoder's vision weights, so the engine needs `--llm_vision` pointing at the matching `mmproj` file (Unsloth's `Qwen3-VL-8B-Instruct-GGUF` ships one); without it sd-server rejects every edit. `--strength 1.0` starts an edit from noise, as Qwen's own pipeline does: sd-server's default of 0.75 starts from the first image, so the result keeps its colors and lighting and largely ignores the instruction. Plain generations have no starting image, so `--strength` does not affect them. sd-server resizes every reference to one pixel area before encoding it; for Qwen Image 2.1 that area defaults to the output's, so each reference costs as many tokens as the image being generated, and the cache of them outgrows the GPU past two references. `vae_input_max_pixels=1048576` sets that area to 1 megapixel instead, which lets four references fit on a 24 GB card. To edit from Open WebUI, enable **Image Editing** in the same settings page with the same engine, base URL, key, and model, and set an edit size: without one the output takes the first image's size, which for a phone photo is slow and too large to decode untiled. Attach images to a chat message with image generation on, and Open WebUI sends the images from the last two messages that have any.
 
 ## Setup
 

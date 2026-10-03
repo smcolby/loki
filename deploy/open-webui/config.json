@@ -1,0 +1,19 @@
+{
+  "image_generation.enable": true,
+  "image_generation.engine": "openai",
+  "image_generation.model": "qwen-image-2.1-q8_0",
+  "image_generation.size": "1920x1280",
+  "image_generation.prompt.enable": false,
+  "image_generation.openai.api_base_url": "http://gateway:8080/v1",
+  "image_generation.openai.api_key": "none",
+  "images.edit.enable": true,
+  "images.edit.engine": "openai",
+  "images.edit.model": "qwen-image-2.1-q8_0",
+  "images.edit.size": "1920x1280",
+  "images.edit.openai.api_base_url": "http://gateway:8080/v1",
+  "images.edit.openai.api_key": "none",
+  "chat.context_compaction.enable": true,
+  "chat.context_compaction.token_threshold": 114688,
+  "chat.context_compaction.token_cap": 183500,
+  "chat.context_compaction.retention_percentage": 40
+}
