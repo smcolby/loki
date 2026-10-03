@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
-from aiohttp import ClientSession, web
+from aiohttp import ClientSession, FormData, web
 
 import gateway as gw
 
@@ -30,6 +30,7 @@ class FakeEngine:
         app.router.add_post("/unload", self.unload_strata)
         app.router.add_post("/v1/chat/completions", self.chat)
         app.router.add_post("/v1/images/generations", self.generate)
+        app.router.add_post("/v1/images/edits", self.edit)
         return app
 
     async def list_models(self, _: web.Request) -> web.Response:
@@ -81,6 +82,15 @@ class FakeEngine:
         self.calls.append(f"generate:{body['model']}")
         self.loaded.add(body["model"])
         return web.json_response({"created": 0, "data": [{"b64_json": "aW1n"}]})
+
+    async def edit(self, request: web.Request) -> web.Response:
+        """Read an sd-server style multipart edit and record its fields and uploaded images."""
+        form = await request.post()
+        images = [field.file.read() for field in form.getall("image[]", [])]
+        self.bodies.append({"model": form["model"], "prompt": form["prompt"], "images": images})
+        self.calls.append(f"edit:{form['model']}")
+        self.loaded.add(str(form["model"]))
+        return web.json_response({"created": 0, "data": [{"b64_json": "ZWRpdA=="}]})
 
 
 @pytest.fixture(autouse=True)
@@ -138,6 +148,18 @@ def _chat(model: str) -> dict:
 def _generate(model: str) -> dict:
     """Build a minimal image generation request body."""
     return {"model": model, "prompt": "a fox", "size": "512x512"}
+
+
+def _edit(model: str | None, images: list[bytes]) -> FormData:
+    """Build an OpenAI-style multipart image edit request, as Open WebUI sends it."""
+    form = FormData()
+    if model is not None:
+        form.add_field("model", model)
+    form.add_field("prompt", "make it night")
+    form.add_field("size", "1920x1280")
+    for index, image in enumerate(images):
+        form.add_field("image[]", image, filename=f"ref{index}.png", content_type="image/png")
+    return form
 
 
 async def _complete(client, model: str) -> bytes:
@@ -260,6 +282,42 @@ async def test_wrong_path_for_model_returns_400(make_client, llama, path, body, 
 
     assert response.status == 400
     assert f"model {model!r} does not serve {path}" in (await response.json())["error"]["message"]
+    assert llama.calls == image.calls == []
+
+
+async def test_image_edit_upload_reaches_image_engine(make_client, llama):
+    """A multipart edit routes by its model field and arrives with every reference image."""
+    image = FakeEngine(["qwen-image"])
+    client = await make_client(llama=llama, **{"image-qwen": image})
+
+    response = await client.post("/v1/images/edits", data=_edit("qwen-image", [b"one", b"two"]))
+
+    assert response.status == 200
+    assert (await response.json())["data"] == [{"b64_json": "ZWRpdA=="}]
+    assert image.bodies == [
+        {"model": "qwen-image", "prompt": "make it night", "images": [b"one", b"two"]}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("model", "status", "message"),
+    [
+        (None, 400, "has no model"),
+        ("qwen", 400, "model 'qwen' does not serve /v1/images/edits"),
+    ],
+    ids=["no-model", "chat-model"],
+)
+async def test_image_edit_upload_without_image_model_is_rejected(
+    make_client, llama, model, status, message
+):
+    """An edit upload with no model field, or naming a chat model, fails before any swap."""
+    image = FakeEngine(["qwen-image"])
+    client = await make_client(llama=llama, **{"image-qwen": image})
+
+    response = await client.post("/v1/images/edits", data=_edit(model, [b"one"]))
+
+    assert response.status == status
+    assert message in (await response.json())["error"]["message"]
     assert llama.calls == image.calls == []
 
 

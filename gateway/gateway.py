@@ -10,11 +10,13 @@ finish, then swaps.
 """
 
 import asyncio
+import email.policy
 import json
 import logging
 import os
 import time
 from dataclasses import dataclass, field
+from email.parser import BytesParser
 from typing import Any, ClassVar
 
 from aiohttp import ClientError, ClientSession, ClientTimeout, web
@@ -41,7 +43,7 @@ TEXT_PATHS = (
     "/v1/messages",
     "/v1/messages/count_tokens",
 )
-IMAGE_PATHS = ("/v1/images/generations",)
+IMAGE_PATHS = ("/v1/images/generations", "/v1/images/edits")
 MODEL_LIST_TTL = 30.0
 UNLOAD_TIMEOUT = 120.0
 POLL_INTERVAL = 0.5
@@ -386,15 +388,54 @@ async def _forward(request: web.Request, engine: Engine, body: bytes) -> web.Str
     return response
 
 
+def _requested_model(body: bytes, content_type: str) -> object:
+    """Return the ``model`` field of a JSON or multipart form request body.
+
+    Image edits arrive as multipart form data with the reference images as file
+    parts; every other request is JSON.
+
+    Parameters
+    ----------
+    body : bytes
+        Raw request body, forwarded to the engine unchanged.
+    content_type : str
+        The request's full Content-Type header, including any boundary.
+
+    Returns
+    -------
+    object
+        The model field's value, or None when the body has no model field.
+
+    Raises
+    ------
+    ValueError
+        If the body is neither JSON nor multipart form data.
+    """
+    if not content_type.lower().startswith("multipart/form-data"):
+        payload = json.loads(body)
+        return payload.get("model") if isinstance(payload, dict) else None
+
+    # Parse the form as a MIME message whose header is the request's Content-Type
+    message = BytesParser(policy=email.policy.HTTP).parsebytes(
+        b"Content-Type: " + content_type.encode() + b"\r\n\r\n" + body
+    )
+    if not message.is_multipart():
+        raise ValueError("multipart body has no parts")
+    for part in message.iter_parts():
+        if part.get_param("name", header="content-disposition") == "model":
+            payload = part.get_payload(decode=True)
+            return payload.decode() if isinstance(payload, bytes) else None
+    return None
+
+
 async def handle_inference(request: web.Request) -> web.StreamResponse:
     """Route a model request to its engine after claiming the GPU for it."""
     gateway: Gateway = request.app["gateway"]
     body = await request.read()
     try:
-        payload = json.loads(body)
+        model_id = _requested_model(body, request.headers.get("Content-Type", ""))
     except ValueError:
-        return api_error(400, "request body must be JSON")
-    model_id = payload.get("model") if isinstance(payload, dict) else None
+        return api_error(400, "request body must be JSON or multipart form data")
     if not isinstance(model_id, str):
         return api_error(400, "request body has no model")
 
