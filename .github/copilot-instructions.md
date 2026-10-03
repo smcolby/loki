@@ -6,7 +6,7 @@ loki (Local Offline Knowledge Index) is a Python CLI tool that manages a self-ho
 
 ## Architecture
 
-- `loki/cli.py`: Click CLI entry point (`setup`, `start`, `stop`, `status`, `update`, `cleanup`)
+- `loki/cli.py`: Click CLI entry point (`setup`, `start`, `stop`, `status`, `kill`, `update`, `cleanup`)
 - `loki/config.py`: Pydantic config models, path helpers, and file generators for `Caddyfile`, `.env`, and `compose.engines.yaml`
 - `loki/presets.py`: Assembles per-model `preset.ini` files under `llama.models_dir` into the `models.ini` router preset, resolving and checking file paths
 - `loki/system.py`: Subprocess-backed system operations: package installation, Docker install, AMD GPU device check, shell profile editing, mDNS announcement via `avahi-publish-address`
