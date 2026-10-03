@@ -176,11 +176,14 @@ Steps that change your system prompt `[Y/n]`. Skipped steps must be completed ma
 loki start    Write generated files, start the Docker Compose stack, and broadcast hostname via mDNS.
 loki stop     Stop the Docker Compose stack and terminate the mDNS broadcast.
 loki status   Check the health of running services and list model load states.
+loki kill     Cancel in-flight requests by restarting Open WebUI, the gateway, and every engine.
 loki update   Upgrade system packages, pull Docker images, and build missing local images.
 loki cleanup  Remove ZIM files and local images no longer matching config.
 ```
 
 After `loki start`, Open WebUI is available at `http://loki.local` (or whichever `url` you configured).
+
+Use `loki kill` when a request hangs, such as an image generation that Open WebUI's stop button leaves running: sd-server cannot abort a generation, so restarting the services is the only way to free the GPU. Chats and settings persist, Caddy and Kiwix keep running, and each model loads again on its next request.
 
 Local image tags name every build input: `loki-llama:<gpu_targets>-rocm<rocm_version>-<ref>`, `loki-strata:<gpu_targets>-rocm<rocm_version>-<ref>`, `loki-image:<gpu_targets>-rocm<rocm_version>-<ref>`, and `loki-gateway:<hash of the gateway sources>`. `loki update` builds only images whose tag is missing, so an unchanged config rebuilds nothing. To pick up a new llama.cpp release, set `llama.ref` to the new commit and run `loki update`. `loki cleanup` then offers to remove the image built for the previous commit.
 

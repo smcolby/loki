@@ -504,6 +504,23 @@ def stop() -> None:
 
 
 @cli.command()
+def kill() -> None:
+    """Cancel every in-flight request by restarting Open WebUI, the gateway, and the engines.
+
+    sd-server cannot abort a generation and Open WebUI keeps an image request
+    running after its chat is stopped, so a restart is the one way to free the
+    GPU. Models load again on their next request; chats and settings persist.
+    """
+    _require_tool("docker")
+    config = load_config()
+    services = ["open-webui", "gateway", *config.engine_services()]
+    click.echo(f"Restarting {', '.join(services)} ...")
+    if subprocess.run(_compose("restart", *services), check=False).returncode != 0:
+        raise SystemExit("Error: docker compose restart failed; check `loki status`.")
+    click.echo("Done: nothing is running, and the next request starts clean.")
+
+
+@cli.command()
 def status() -> None:
     """Check the health of running services."""
     config = load_config()
