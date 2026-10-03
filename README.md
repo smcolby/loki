@@ -196,23 +196,17 @@ Request reasoning depth with the OpenAI `reasoning_effort` field. A chat templat
 
 ## Connecting Kiwix to Open WebUI
 
-A ready-made Open WebUI tool definition lives at [`tools/kiwix_tool.py`](tools/kiwix_tool.py). It exposes the Kiwix server to the LLM as a callable tool, communicating over the Docker internal network so it works regardless of your configured host port.
+A ready-made Open WebUI tool definition lives at [`tools/kiwix_tool.py`](tools/kiwix_tool.py). It gives the model two functions, `search_article_titles` and `read_articles`, which reach the Kiwix server over the Docker network at `http://kiwix-serve:8080`, so it works regardless of your configured host port. Articles come back as plain text with headings, without citation markers, reference lists, or navigation boxes, and up to 30,000 characters each.
 
 To load it:
 
-1. Open `http://loki.local` and navigate to **Admin Panel → Tools**, then click **+**.
+1. Open `http://loki.local` and navigate to **Workspace → Tools**, then click **+**.
 2. Paste the full contents of `tools/kiwix_tool.py` into the editor and save.
-3. Go to **Admin Panel → Models**, select your model, and enable the Kiwix tool under the **Tools** tab.
+3. Enable the tool for each model: **Workspace → Models** (or **Admin Panel → Settings → Models**), edit the model, and check the tool under **Tools**. A tool that is installed but not enabled on a model is never offered to it.
 
-### Enabling native tool calling
+Open WebUI calls tools natively by default (**Advanced Params → Function Calling**), which every model loki serves supports. To update the tool later, paste the new file over the old one in the same editor.
 
-By default, Open WebUI injects tool definitions into the system prompt, which is unreliable with smaller models. For best results, enable native tool calling:
-
-1. **Admin Panel → Models** → select your model.
-2. Under **Advanced Parameters**, set **Tool Calling** to **Native**.
-3. Save.
-
-> **Note:** Native tool calling requires a model fine-tuned for function calling (e.g. `qwen3`, `gemma4`). If responses degrade after enabling it, the model may not support the feature; revert to the default setting.
+If web search is also enabled, the model may search the web instead of Kiwix; ask for "the offline Wikipedia" or disable web search in that chat to steer it.
 
 ---
 
