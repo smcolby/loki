@@ -83,6 +83,11 @@ image:
         - "1280"
   models_dir: ~/.llms             # Mounted read-only into every image engine
 
+# Kokoro-FastAPI reads replies aloud in Open WebUI, on the CPU only
+tts:
+  enabled: true
+  voice: af_heart
+
 # Text model the gateway loads when it starts, so the first prompt skips the load
 preload: swift-qwen3.8-flash-next-iq2_xs
 

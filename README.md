@@ -241,6 +241,18 @@ Open WebUI calls tools natively by default (**Advanced Params → Function Calli
 
 If web search is also enabled, the model may search the web instead of Kiwix; ask for "the offline Wikipedia" or disable web search in that chat to steer it.
 
+## Reading replies aloud
+
+Open WebUI's read-aloud button uses the browser's built-in voices unless it is given a speech server. loki can run [Kokoro-FastAPI](https://github.com/remsky/Kokoro-FastAPI), which serves the 82M-parameter Kokoro voice model through OpenAI's `/v1/audio/speech` API. It runs on the CPU only, so playing a reply never unloads the chat model or waits for an image. Enable it in `config.yaml`:
+
+```yaml
+tts:
+  enabled: true
+  voice: af_heart    # Voice used when a request names none
+```
+
+`loki start` then runs it as Compose service `kokoro` (container `loki-kokoro`), reachable only inside the stack. To use it, open **Admin Panel > Settings > Audio**, set the text-to-speech engine to OpenAI, the base URL to `http://kokoro:8880/v1`, any API key, the model to `kokoro`, and the voice to a Kokoro voice name. Kokoro lists its voices at `/v1/audio/voices`. The first letter of a name is its accent (`a` American, `b` British), and the second is `f` or `m`. Each user can pick a different voice under **Settings > Audio**. On a 16-core CPU, Kokoro speaks about five times faster than real time and uses about 1.2 GiB of RAM.
+
 ---
 
 ## Advanced

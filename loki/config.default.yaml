@@ -62,6 +62,14 @@ image:
   gpu_targets: gfx1100    # AMD GPU architecture (rocminfo | grep gfx)
   rocm_version: 7.2.4     # ROCm build toolchain and bundled runtime
 
+# Kokoro-FastAPI reads replies aloud in Open WebUI. It runs on the CPU, so playing
+# a reply never unloads the chat model. Point Open WebUI's text-to-speech settings
+# at http://kokoro:8880/v1 (see README).
+tts:
+  enabled: false
+  image: ghcr.io/remsky/kokoro-fastapi-cpu:v0.9.0  # Kokoro-FastAPI release
+  voice: af_heart        # Voice used when a request names none
+
 # Text model the gateway loads when it starts, so the first prompt skips the load.
 # It stays loaded until a request for another model swaps it out. Leave it out to
 # load nothing until the first request, for example:

@@ -257,6 +257,28 @@ class ImageConfig(BaseModel):
         return {f"image-{name}": engine for name, engine in self.engines.items()}
 
 
+class TtsConfig(BaseModel):
+    """Settings for the optional Kokoro server that reads replies aloud in Open WebUI.
+
+    Attributes
+    ----------
+    enabled : bool
+        Run Kokoro-FastAPI on the CPU as Compose service ``kokoro``, reachable
+        inside the stack at ``http://kokoro:8880/v1``. Default is ``False``.
+    image : str
+        Kokoro-FastAPI CPU image, pinned to a release.
+    voice : str
+        Voice used when a request names none; Kokoro loads it at startup.
+        Default is ``"af_heart"``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    image: str = "ghcr.io/remsky/kokoro-fastapi-cpu:v0.9.0"
+    voice: str = "af_heart"
+
+
 class LokiConfig(BaseModel):
     """Top-level configuration for the loki stack.
 
@@ -272,6 +294,8 @@ class LokiConfig(BaseModel):
         Strata image and model settings.
     image : ImageConfig
         Image generation engine settings.
+    tts : TtsConfig
+        Text-to-speech server settings.
     preload : str or None
         Id of a text model the gateway loads when it starts, so the first
         request skips the load. ``None`` (the default) loads nothing until a
@@ -287,6 +311,7 @@ class LokiConfig(BaseModel):
     llama: LlamaConfig = Field(default_factory=LlamaConfig)
     strata: StrataConfig = Field(default_factory=StrataConfig)
     image: ImageConfig = Field(default_factory=ImageConfig)
+    tts: TtsConfig = Field(default_factory=TtsConfig)
     preload: str | None = None
     kiwix_files: list[KiwixFile] = []
 
@@ -406,7 +431,7 @@ def models_preset_path() -> Path:
 
 
 def engines_compose_path() -> Path:
-    """Return the path to the generated Compose file for Strata and image engines.
+    """Return the path to the generated Compose file for engines and optional services.
 
     Returns
     -------
@@ -541,18 +566,21 @@ def build_env_file(config: LokiConfig, images: dict[str, str]) -> str:
 
 
 def build_engines_compose(config: LokiConfig, images: dict[str, str], root: Path) -> str:
-    """Return a Compose file with one service per configured Strata and image engine.
+    """Return a Compose file with one service per configured engine, plus Kokoro if enabled.
 
     Every Strata service runs the same image and mounts ``data_dir`` read-only
     at its host path, so paths inside an engine config resolve unchanged; only
     the engine config mounted at ``/etc/strata/strata.json`` differs. Every
     image service runs the sd-server image, mounts ``models_dir`` the same way,
-    and passes its engine's arguments as the container command.
+    and passes its engine's arguments as the container command. Kokoro runs
+    its published CPU image with no GPU devices, so it never contends with the
+    engines for the GPU.
 
     Parameters
     ----------
     config : LokiConfig
-        Configuration whose ``strata`` and ``image`` sections list the engines.
+        Configuration whose ``strata`` and ``image`` sections list the engines
+        and whose ``tts`` section enables Kokoro.
     images : dict of str to str
         Image names from :func:`image_names`.
     root : Path
@@ -561,7 +589,8 @@ def build_engines_compose(config: LokiConfig, images: dict[str, str], root: Path
     Returns
     -------
     str
-        Compose YAML; its ``services`` mapping is empty when no engine is configured.
+        Compose YAML; its ``services`` mapping is empty when no engine or
+        Kokoro is configured.
     """
     # Give each service its own dicts so the YAML carries no anchors
     strata = config.strata
@@ -617,6 +646,17 @@ def build_engines_compose(config: LokiConfig, images: dict[str, str], root: Path
             "security_opt": ["seccomp=unconfined"],
             "volumes": [f"{models_dir}:{models_dir}:ro"],
             "command": list(engine.args),
+            "networks": ["loki-net"],
+        }
+
+    # Add the text-to-speech server, which runs on the CPU only
+    tts = config.tts
+    if tts.enabled:
+        services["kokoro"] = {
+            "image": tts.image,
+            "container_name": "loki-kokoro",
+            "restart": "unless-stopped",
+            "environment": ["API_LOG_LEVEL=WARNING", f"DEFAULT_VOICE={tts.voice}"],
             "networks": ["loki-net"],
         }
 

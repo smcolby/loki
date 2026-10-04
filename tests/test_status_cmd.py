@@ -1,5 +1,6 @@
 """Tests for the status subcommand: service health checks."""
 
+import pytest
 import requests
 from click.testing import CliRunner
 
@@ -210,6 +211,22 @@ def test_status_prints_container_running(mocker, sample_config):
     assert "loki-open-webui: RUNNING" in result.output
     assert "loki-caddy: RUNNING" in result.output
     assert "loki-kiwix: RUNNING" in result.output
+
+
+@pytest.mark.parametrize("enabled", [True, False], ids=["enabled", "disabled"])
+def test_status_lists_kokoro_only_when_enabled(mocker, sample_config, enabled):
+    """The Kokoro container is checked only when text-to-speech is enabled."""
+    sample_config.tts.enabled = enabled
+    mocker.patch("loki.cli.load_config", return_value=sample_config)
+    mocker.patch("loki.cli.requests.get", autospec=True, return_value=_response(mocker))
+    proc = mocker.MagicMock()
+    proc.returncode = 0
+    proc.stdout = "running\n"
+    mocker.patch("loki.cli.subprocess.run", autospec=True, return_value=proc)
+
+    result = CliRunner().invoke(cli, ["status"])
+
+    assert ("loki-kokoro: RUNNING" in result.output) is enabled
 
 
 def test_status_prints_container_not_found(mocker, sample_config):
