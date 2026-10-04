@@ -6,15 +6,17 @@ model lists, sends each request to the engine that owns the requested model,
 and unloads every other engine's models before the first request to a
 different engine. Requests to the engine that already holds the GPU pass
 straight through; a request for another engine waits for in-flight requests to
-finish, then swaps.
+finish, then swaps. An optional preload loads one text model at startup.
 """
 
 import asyncio
+import contextlib
 import email.policy
 import json
 import logging
 import os
 import time
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from email.parser import BytesParser
 from typing import Any, ClassVar
@@ -47,6 +49,8 @@ IMAGE_PATHS = ("/v1/images/generations", "/v1/images/edits")
 MODEL_LIST_TTL = 30.0
 UNLOAD_TIMEOUT = 120.0
 POLL_INTERVAL = 0.5
+PRELOAD_RETRY = 5.0
+PRELOAD_TIMEOUT = 600.0
 
 
 class EngineError(RuntimeError):
@@ -458,14 +462,97 @@ async def handle_inference(request: web.Request) -> web.StreamResponse:
         await gateway.arbiter.release()
 
 
-def build_app(engines: list[Engine]) -> web.Application:
-    """Create the gateway application around ``engines``."""
+async def preload(gateway: Gateway, model_id: str) -> None:
+    """Load a text model onto the GPU so the first request skips the load.
+
+    Waits up to ``PRELOAD_TIMEOUT`` seconds for an engine to list the model,
+    then sends it a one-token chat request through the arbiter. A request that
+    claims the GPU first wins, and the preload is skipped. Failures are logged,
+    never raised, since the gateway serves requests either way.
+
+    Parameters
+    ----------
+    gateway : Gateway
+        Gateway whose engines and arbiter serve the model.
+    model_id : str
+        Id of the text model to load.
+    """
+    # Wait for the owning engine to start and list the model
+    deadline = time.monotonic() + PRELOAD_TIMEOUT
+    while True:
+        try:
+            engine = await gateway.owner(model_id)
+        except EngineError as exc:
+            log.warning("preload of %s cannot list models: %s", model_id, exc)
+            engine = None
+        if engine is not None:
+            break
+        if time.monotonic() > deadline:
+            log.warning("preload skipped: no engine listed %s", model_id)
+            return
+        await asyncio.sleep(PRELOAD_RETRY)
+
+    if engine.paths != TEXT_PATHS:
+        log.warning("preload skipped: %s is not a text model", model_id)
+        return
+
+    # Leave the GPU to any request that arrived while engines were starting
+    arbiter = gateway.arbiter
+    if arbiter.active is not None or arbiter.inflight or any(arbiter.waiting.values()):
+        log.info("preload of %s skipped: a request claimed the GPU first", model_id)
+        return
+    try:
+        await arbiter.acquire(engine)
+    except EngineError as exc:
+        log.warning("preload of %s cannot free the GPU: %s", model_id, exc)
+        return
+
+    # Generate one token, which loads the model's weights
+    body = {"model": model_id, "messages": [{"role": "user", "content": "Hi"}], "max_tokens": 1}
+    log.info("preloading %s on %s", model_id, engine.name)
+    started = time.monotonic()
+    try:
+        async with engine.session.post(engine.url + "/v1/chat/completions", json=body) as response:
+            await response.read()
+        if response.status == 200:
+            log.info("preloaded %s in %.0f s", model_id, time.monotonic() - started)
+        else:
+            log.warning("preload of %s returned HTTP %d", model_id, response.status)
+    except (ClientError, TimeoutError) as exc:
+        log.warning("preload of %s failed: %s", model_id, exc)
+    finally:
+        await arbiter.release()
+
+
+def build_app(engines: list[Engine], preload_model: str = "") -> web.Application:
+    """Create the gateway application around ``engines``.
+
+    Parameters
+    ----------
+    engines : list[Engine]
+        Engines in priority order for listing.
+    preload_model : str, optional
+        Text model to load in the background at startup; empty (the default)
+        loads nothing until the first request.
+    """
     app = web.Application(client_max_size=64 * 1024**2)
     app["gateway"] = Gateway(engines)
     app.router.add_get("/health", handle_health)
     app.router.add_get("/v1/models", handle_models)
     for path in (*TEXT_PATHS, *IMAGE_PATHS):
         app.router.add_post(path, handle_inference)
+
+    # Run the preload beside request handling and stop it on shutdown
+    if preload_model:
+
+        async def preload_context(app: web.Application) -> AsyncIterator[None]:
+            task = asyncio.create_task(preload(app["gateway"], preload_model))
+            yield
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        app.cleanup_ctx.append(preload_context)
     return app
 
 
@@ -548,10 +635,11 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     spec = os.environ.get("LOKI_ENGINES", "")
     image_models = os.environ.get("LOKI_IMAGE_MODELS", "")
+    preload_model = os.environ.get("LOKI_PRELOAD", "")
 
     async def factory() -> web.Application:
         session = ClientSession(timeout=ClientTimeout(total=None, sock_connect=10))
-        app = build_app(parse_engines(spec, session, image_models))
+        app = build_app(parse_engines(spec, session, image_models), preload_model)
 
         async def close_session(_: web.Application) -> None:
             await session.close()
@@ -562,7 +650,7 @@ def main() -> None:
     web.run_app(factory(), host="0.0.0.0", port=8080)  # noqa: S104 (compose network only)
 
 
-__all__ = ["Arbiter", "Engine", "Gateway", "build_app", "main", "parse_engines"]
+__all__ = ["Arbiter", "Engine", "Gateway", "build_app", "main", "parse_engines", "preload"]
 
 if __name__ == "__main__":
     main()

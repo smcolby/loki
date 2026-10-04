@@ -83,6 +83,9 @@ image:
         - "1280"
   models_dir: ~/.llms             # Mounted read-only into every image engine
 
+# Text model the gateway loads when it starts, so the first prompt skips the load
+preload: swift-qwen3.8-flash-next-iq2_xs
+
 # ZIM archives to download during `loki setup`.
 # Each entry requires a name (used for display) and a direct download URL.
 kiwix_files:

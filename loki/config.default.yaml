@@ -62,6 +62,11 @@ image:
   gpu_targets: gfx1100    # AMD GPU architecture (rocminfo | grep gfx)
   rocm_version: 7.2.4     # ROCm build toolchain and bundled runtime
 
+# Text model the gateway loads when it starts, so the first prompt skips the load.
+# It stays loaded until a request for another model swaps it out. Leave it out to
+# load nothing until the first request, for example:
+#   preload: qwen3.8-27b-iq4xs
+
 # ZIM archives to download during `loki setup`.
 # Each entry requires a name (used for display) and a direct download URL.
 kiwix_files:

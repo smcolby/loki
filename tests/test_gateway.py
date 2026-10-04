@@ -460,3 +460,107 @@ async def test_parse_engines_pairs_image_engines_with_ids(spec, image_models, me
     async with ClientSession() as session:
         with pytest.raises(ValueError, match=message):
             gw.parse_engines(spec, session, image_models)
+
+
+@pytest.fixture
+async def make_gateway(aiohttp_server):
+    """Return a factory that builds a Gateway over ``name=FakeEngine`` pairs."""
+    session = ClientSession()
+
+    async def make(**engines: FakeEngine) -> gw.Gateway:
+        parts = [
+            f"{name}={(await aiohttp_server(e.app())).make_url('')}" for name, e in engines.items()
+        ]
+        return gw.Gateway(gw.parse_engines(",".join(parts), session))
+
+    yield make
+    await session.close()
+
+
+@pytest.fixture
+def fast_preload(monkeypatch):
+    """Retry the preload's model lookup quickly and give up after half a second."""
+    monkeypatch.setattr(gw, "PRELOAD_RETRY", 0.01)
+    monkeypatch.setattr(gw, "PRELOAD_TIMEOUT", 0.5)
+
+
+async def test_preload_unloads_other_engines_and_generates_one_token(
+    make_gateway, llama, strata, fast_preload
+):
+    """The preload takes the GPU like a request and asks the model for a single token."""
+    llama.loaded.add("qwen")
+    gateway = await make_gateway(llama=llama, strata=strata)
+
+    await gw.preload(gateway, "flash")
+
+    assert llama.calls == ["unload:qwen"]
+    assert strata.calls == ["chat:flash"]
+    assert strata.bodies[0]["max_tokens"] == 1
+    assert gateway.arbiter.active == "strata"
+    assert gateway.arbiter.inflight == 0
+
+
+async def test_preload_waits_for_the_engine_to_list_the_model(make_gateway, fast_preload):
+    """An engine that is still starting lists nothing, and the preload retries until it does."""
+    starting = FakeEngine([])
+    gateway = await make_gateway(strata=starting)
+
+    async def finish_starting() -> None:
+        await asyncio.sleep(0.05)
+        starting.models.append("flash")
+
+    await asyncio.gather(gw.preload(gateway, "flash"), finish_starting())
+
+    assert starting.calls == ["chat:flash"]
+
+
+async def test_preload_gives_up_on_a_model_no_engine_serves(make_gateway, llama, fast_preload):
+    """An unknown model id is logged and skipped once the wait times out."""
+    gateway = await make_gateway(llama=llama)
+
+    await gw.preload(gateway, "missing")
+
+    assert llama.calls == []
+    assert gateway.arbiter.active is None
+
+
+async def test_preload_leaves_the_gpu_to_an_earlier_request(make_gateway, llama, strata):
+    """A request that claimed the GPU before the preload keeps its model loaded."""
+    gateway = await make_gateway(llama=llama, strata=strata)
+    gateway.arbiter.active = "llama"
+
+    await gw.preload(gateway, "flash")
+
+    assert llama.calls == []
+    assert strata.calls == []
+
+
+async def test_preload_skips_image_models(make_gateway, aiohttp_server, fast_preload):
+    """Only text models are preloaded, since an image engine needs a prompt to generate."""
+    image = FakeEngine(["qwen-image"])
+    session = ClientSession()
+    url = (await aiohttp_server(image.app())).make_url("")
+    gateway = gw.Gateway(gw.parse_engines(f"image-qwen={url}", session, "image-qwen=qwen-image"))
+
+    await gw.preload(gateway, "qwen-image")
+    await session.close()
+
+    assert image.calls == []
+
+
+async def test_app_preloads_its_model_at_startup(
+    aiohttp_client, aiohttp_server, strata, fast_preload
+):
+    """A gateway built with a preload model loads it without any client request."""
+    session = ClientSession()
+    url = (await aiohttp_server(strata.app())).make_url("")
+    app = gw.build_app(gw.parse_engines(f"strata={url}", session), "flash")
+
+    await aiohttp_client(app)
+    for _ in range(100):
+        if strata.calls:
+            break
+        await asyncio.sleep(0.01)
+    await session.close()
+
+    assert strata.calls == ["chat:flash"]

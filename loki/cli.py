@@ -471,6 +471,10 @@ def start() -> None:
     click.echo("Starting Docker Compose stack ...")
     subprocess.run(_compose("up", "-d", "--remove-orphans"), check=False)
     click.echo(f"Model API ({', '.join(config.engine_services())}): {_api_url(config)}")
+    if config.preload:
+        click.echo(
+            f"Loading {config.preload} in the background; `loki status` shows it once loaded."
+        )
 
     hostname = config.url
     if hostname.endswith(".local"):
