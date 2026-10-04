@@ -43,6 +43,26 @@ def test_setup_writes_env_file(mocker, sample_config, tmp_path):
     assert "API_PORT=8090" in content
 
 
+def test_setup_stops_before_builds_when_a_strata_config_is_missing(
+    mocker, sample_config, tmp_path, add_strata_engines
+):
+    """A missing Strata engine config ends setup before any image build or ZIM download."""
+    data_dir = add_strata_engines(sample_config, "swift")
+    (data_dir / "swift.json").unlink()
+    mocker.patch("loki.cli.load_config", return_value=sample_config)
+    mocker.patch("loki.cli.kiwix_dir", return_value=tmp_path)
+    mock_run = mocker.patch("loki.cli.subprocess.run", autospec=True)
+
+    result = CliRunner().invoke(cli, ["setup"], input="y\nn\n")
+
+    assert result.exit_code != 0
+    assert "Strata engine config not found" in result.output
+    assert not any(
+        cmd[0] == "aria2c" or "build" in cmd
+        for cmd in (call.args[0] for call in mock_run.call_args_list)
+    )
+
+
 def test_setup_env_file_uses_custom_ports(mocker, tmp_path):
     """The setup command writes custom port values to the .env file."""
     config = LokiConfig(ports=PortsConfig(caddy=8000, kiwix=9090, api=9000))
