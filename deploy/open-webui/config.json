@@ -40,5 +40,6 @@
     "defaultFeatureIds": [
       "web_search"
     ]
-  }
+  },
+  "audio.tts.split_on": "paragraphs"
 }
