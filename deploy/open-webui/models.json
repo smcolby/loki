@@ -258,47 +258,72 @@
     "is_active": true
   },
   {
-    "id": "image-studio",
-    "base_model_id": "qwen3.8-27b-iq4xs",
-    "name": "Image Studio",
+    "id": "image_studio.draft",
+    "base_model_id": null,
+    "name": "Image Studio: Draft",
     "meta": {
       "profile_image_url": "/static/favicon.png",
-      "description": "Sends your message and attached images unchanged to Qwen Image 2.1. Attach references to edit; send text alone to generate.",
+      "description": null,
       "capabilities": {
-        "file_context": true,
         "vision": true,
         "file_upload": true,
-        "web_search": true,
-        "image_generation": true,
-        "code_interpreter": true,
-        "citations": true,
-        "status_updates": true,
-        "builtin_tools": true
-      },
-      "knowledge": null,
-      "suggestion_prompts": null,
-      "tags": [],
-      "defaultFeatureIds": [
-        "image_generation"
-      ],
-      "builtinTools": {
-        "time": true,
-        "memory": true,
-        "chats": true,
-        "notes": true,
-        "knowledge": true,
-        "channels": true,
-        "web_search": true,
         "image_generation": false,
-        "code_interpreter": true
+        "web_search": false,
+        "code_interpreter": false,
+        "citations": false,
+        "status_updates": true,
+        "builtin_tools": false,
+        "file_context": false
       },
-      "toolIds": []
+      "knowledge": null
     },
-    "params": {
-      "function_calling": "legacy",
-      "reasoning_effort": "low",
-      "compact_token_threshold": 183500
+    "params": {},
+    "is_active": true
+  },
+  {
+    "id": "image_studio.production",
+    "base_model_id": null,
+    "name": "Image Studio: Production",
+    "meta": {
+      "profile_image_url": "/static/favicon.png",
+      "description": null,
+      "capabilities": {
+        "vision": true,
+        "file_upload": true,
+        "image_generation": false,
+        "web_search": false,
+        "code_interpreter": false,
+        "citations": false,
+        "status_updates": true,
+        "builtin_tools": false,
+        "file_context": false
+      },
+      "knowledge": null
     },
+    "params": {},
+    "is_active": true
+  },
+  {
+    "id": "image_studio.refine",
+    "base_model_id": null,
+    "name": "Image Studio: Refine",
+    "meta": {
+      "profile_image_url": "/static/favicon.png",
+      "description": null,
+      "capabilities": {
+        "vision": true,
+        "file_upload": true,
+        "image_generation": false,
+        "web_search": false,
+        "code_interpreter": false,
+        "citations": false,
+        "status_updates": true,
+        "builtin_tools": false,
+        "file_context": false
+      },
+      "knowledge": null
+    },
+    "params": {},
     "is_active": true
   }
 ]

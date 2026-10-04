@@ -1,0 +1,90 @@
+# The local hostname used to reach the server from other devices on your network.
+# Use the .local TLD to enable mDNS resolution without any router configuration.
+# See the README for setup instructions on Linux and macOS.
+url: loki.local
+
+# Host ports exposed by the Docker Compose services.
+# Change these if the defaults conflict with other services on your machine.
+ports:
+  caddy: 80      # Port for the Caddy reverse proxy (Open WebUI).
+  kiwix: 8080    # Port for the Kiwix offline knowledge server.
+  api: 8090      # Port for the OpenAI/Anthropic-compatible model API (all engines).
+
+# llama-server runs in a container built for one AMD GPU from a pinned llama.cpp commit.
+llama:
+  # Each subdirectory holding a preset.ini is served as one model (see README).
+  models_dir: ~/.llms
+  ref: 5d806aa2575e01e126651fd69ab1ab6cefff861d  # llama.cpp commit to build
+  gpu_targets: gfx1100   # AMD GPU architecture (rocminfo | grep gfx)
+  rocm_version: 7.2.4    # ROCm build toolchain and bundled runtime
+  max_loaded: 1          # Models kept in VRAM at once; least recently used is unloaded
+  # Options every model gets unless its preset.ini overrides them
+  # (llama-server long option names without the leading dashes).
+  defaults:
+    n-gpu-layers: 99     # Keep every layer on the GPU
+    fit: "off"           # Fail loudly instead of shrinking context or layers to fit
+    flash-attn: "on"
+    cache-type-k: q4_0   # Quantized KV cache for long contexts
+    cache-type-v: q4_0
+    parallel: 1          # One request slot, so the full context goes to it
+    cache-ram: 8192      # MiB of host RAM for reusable prompt prefixes
+    ctx-checkpoints: 32
+
+# Strata runs one model (Qwen3.8-Flash-Next) behind the same API. Only one engine
+# holds the GPU at a time: the gateway unloads the other before switching.
+strata:
+  # Engine name -> engine config in data_dir; each runs as Compose service strata-<name>
+  engines:
+    qwen: qwen.json
+    swift: swift.json
+  # Holds the engine configs (engine args, tokenizer, model name) and the files they name.
+  data_dir: ~/.llms/strata
+  ref: 1678de333d0e0711bc414ad992b640e1a37dd814  # Strata commit to build
+  gpu_targets: gfx1100            # AMD GPU architecture (rocminfo | grep gfx)
+  rocm_version: 7.10.0a20251120   # TheRock ROCm wheels for the build and runtime
+
+image:
+  # Engine name -> model id and sd-server args; each runs as Compose service image-<name>
+  engines:
+    # Qwen Image 2.1 base: 40 steps, no CFG, EasyCache, 1920x1280 (decodes untiled; 2528x1696 needs VAE tiling)
+    # The Qwen3-VL vision encoder reads reference images for /v1/images/edits; strength 1.0
+    # starts edits from noise, since lower values pin the output to the first image's colors
+    qwen-image-base:
+      model: qwen-image-2.1-q8_0
+      args:
+        - --diffusion-model
+        - /home/you/.llms/qwen-image-2.1/qwen-image-2.1-Q8_0.gguf
+        - --llm
+        - /home/you/.llms/qwen-image-2.1/Qwen3-VL-8B-Instruct-UD-Q4_K_XL.gguf
+        - --llm_vision
+        - /home/you/.llms/qwen-image-2.1/Qwen3-VL-8B-Instruct-mmproj-F16.gguf
+        - --vae
+        - /home/you/.llms/qwen-image-2.1/qwen_image_2.1_vae_bf16.safetensors
+        - --params-backend
+        - disk
+        - --diffusion-fa
+        - --cfg-scale
+        - "1.0"
+        - --cache-mode
+        - easycache
+        - --sampling-method
+        - euler
+        - --steps
+        - "40"
+        - --strength
+        - "1.0"
+        - --seed
+        - "-1"
+        - --ref-image-args
+        - vae_input_max_pixels=1048576
+        - --width
+        - "1920"
+        - --height
+        - "1280"
+  models_dir: ~/.llms             # Mounted read-only into every image engine
+
+# ZIM archives to download during `loki setup`.
+# Each entry requires a name (used for display) and a direct download URL.
+kiwix_files:
+  - name: wikipedia_en_all_nopic
+    url: https://download.kiwix.org/zim/wikipedia/wikipedia_en_all_nopic_2025-12.zim
