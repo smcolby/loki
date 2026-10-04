@@ -409,6 +409,24 @@ def test_image_rejects_bad_engines(engines, message):
         ImageConfig.model_validate({"engines": engines})
 
 
+@pytest.mark.parametrize(
+    ("preload", "line"),
+    [("swift-flash", "LOKI_PRELOAD=swift-flash"), (None, "LOKI_PRELOAD=")],
+    ids=["set", "unset"],
+)
+def test_build_env_file_passes_the_preload_model(preload, line):
+    """The gateway receives the preload model id, or an empty value to load nothing."""
+    lines = build_env_file(LokiConfig(preload=preload), IMAGES).splitlines()
+
+    assert line in lines
+
+
+def test_preload_rejects_an_id_that_breaks_the_env_file():
+    """A preload id with whitespace would split the .env line, so config loading rejects it."""
+    with pytest.raises(ValidationError, match="preload model id"):
+        LokiConfig(preload="qwen flash")
+
+
 def test_image_names_carry_every_build_input():
     """Image tags name the GPU target, ROCm version, and commit, so a change names a new image."""
     config = LokiConfig(

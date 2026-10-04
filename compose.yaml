@@ -11,6 +11,7 @@ services:
     environment:
       - LOKI_ENGINES=${LOKI_ENGINES:?run loki start to write .env}
       - LOKI_IMAGE_MODELS=${LOKI_IMAGE_MODELS:-}
+      - LOKI_PRELOAD=${LOKI_PRELOAD:-}
     ports:
       - "${API_PORT:-8090}:8080"
     depends_on:

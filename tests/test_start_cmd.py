@@ -73,6 +73,16 @@ def test_start_prints_api_url_with_engines(mocker, sample_config):
     assert "Model API (llama): http://loki.local:8090/v1" in result.output
 
 
+def test_start_reports_the_preload_model(mocker, sample_config):
+    """With a preload model set, start says the model is loading in the background."""
+    sample_config.preload = "swift-flash"
+    mocker.patch("loki.cli.load_config", return_value=sample_config)
+
+    result = CliRunner().invoke(cli, ["start"])
+
+    assert "Loading swift-flash in the background" in result.output
+
+
 def test_start_writes_strata_services_and_routes(
     mocker, sample_config, tmp_path, add_strata_engines
 ):

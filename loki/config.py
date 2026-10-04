@@ -272,6 +272,10 @@ class LokiConfig(BaseModel):
         Strata image and model settings.
     image : ImageConfig
         Image generation engine settings.
+    preload : str or None
+        Id of a text model the gateway loads when it starts, so the first
+        request skips the load. ``None`` (the default) loads nothing until a
+        request arrives.
     kiwix_files : list of KiwixFile
         ZIM files to download during setup.
     """
@@ -283,7 +287,18 @@ class LokiConfig(BaseModel):
     llama: LlamaConfig = Field(default_factory=LlamaConfig)
     strata: StrataConfig = Field(default_factory=StrataConfig)
     image: ImageConfig = Field(default_factory=ImageConfig)
+    preload: str | None = None
     kiwix_files: list[KiwixFile] = []
+
+    @field_validator("preload")
+    @classmethod
+    def _valid_preload(cls, value: str | None) -> str | None:
+        """Reject ids that would break the gateway's environment variable."""
+        if value is not None and not MODEL_ID.fullmatch(value):
+            raise ValueError(
+                f"preload model id {value!r} must be letters, digits, '.', '_', ':', '/' or '-'"
+            )
+        return value
 
     def engine_services(self) -> list[str]:
         """Return the Compose services that serve models, in gateway listing order."""
@@ -514,6 +529,7 @@ def build_env_file(config: LokiConfig, images: dict[str, str]) -> str:
         f"API_PORT={ports.api}\n"
         f"LOKI_ENGINES={engines}\n"
         f"LOKI_IMAGE_MODELS={image_models}\n"
+        f"LOKI_PRELOAD={config.preload or ''}\n"
         f"GATEWAY_IMAGE={images['gateway']}\n"
         f"LLAMA_IMAGE={images['llama']}\n"
         f"LLAMA_MODELS_DIR={llama.models_dir}\n"

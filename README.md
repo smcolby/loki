@@ -119,6 +119,14 @@ Each engine runs in its own container as Compose service `strata-<name>`, define
 
 Only one engine holds the GPU at a time. The first request for a model on the other engine waits for in-flight requests to finish, unloads the current engine's models, and then loads the requested one.
 
+To have a model ready for the first prompt, name it under `preload` at the top level of `config.yaml`:
+
+```yaml
+preload: swift-qwen3.8-flash-next-iq2_xs
+```
+
+The gateway loads it in the background whenever it starts (`loki start`, `loki kill`, or a reboot), unless a request has already claimed the GPU. It stays loaded until a request for a model on another engine swaps it out. `loki status` shows it as `loaded` once it is ready. Only text models can be preloaded.
+
 ### Adding image generation
 
 An image engine runs stable-diffusion.cpp's `sd-server` for one image model. Each entry under `image.engines` names the engine, the model id clients request, and the `sd-server` arguments:
@@ -205,7 +213,7 @@ loki cleanup  Remove ZIM files and local images no longer matching config.
 
 After `loki start`, Open WebUI is available at `http://loki.local` (or whichever `url` you configured).
 
-Use `loki kill` when a request hangs, such as an image generation that Open WebUI's stop button leaves running: sd-server cannot abort a generation, so restarting the services is the only way to free the GPU. Chats and settings persist, Caddy and Kiwix keep running, and each model loads again on its next request.
+Use `loki kill` when a request hangs, such as an image generation that Open WebUI's stop button leaves running: sd-server cannot abort a generation, so restarting the services is the only way to free the GPU. Chats and settings persist, Caddy and Kiwix keep running, and each model loads again on its next request (the `preload` model loads right away).
 
 Local image tags name every build input: `loki-llama:<gpu_targets>-rocm<rocm_version>-<ref>`, `loki-strata:<gpu_targets>-rocm<rocm_version>-<ref>`, `loki-image:<gpu_targets>-rocm<rocm_version>-<ref>`, and `loki-gateway:<hash of the gateway sources>`. `loki update` builds only images whose tag is missing, so an unchanged config rebuilds nothing. To pick up a new llama.cpp release, set `llama.ref` to the new commit and run `loki update`. `loki cleanup` then offers to remove the image built for the previous commit.
 
