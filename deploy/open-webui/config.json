@@ -21,5 +21,8 @@
   "audio.tts.openai.api_base_url": "http://kokoro:8880/v1",
   "audio.tts.openai.api_key": "not-needed",
   "audio.tts.model": "kokoro",
-  "audio.tts.voice": "af_heart"
+  "audio.tts.voice": "af_heart",
+  "audio.tts.openai.params": {
+    "speed": 1.2
+  }
 }
