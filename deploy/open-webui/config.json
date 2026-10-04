@@ -16,5 +16,29 @@
   "chat.context_compaction.token_threshold": 114688,
   "chat.context_compaction.token_cap": 183500,
   "chat.context_compaction.retention_percentage": 40,
-  "evaluation.arena.enable": false
+  "evaluation.arena.enable": false,
+  "audio.tts.engine": "openai",
+  "audio.tts.openai.api_base_url": "http://kokoro:8880/v1",
+  "audio.tts.openai.api_key": "not-needed",
+  "audio.tts.model": "kokoro",
+  "audio.tts.voice": "af_heart",
+  "audio.tts.openai.params": {
+    "speed": 1.2
+  },
+  "models.default_metadata": {
+    "capabilities": {
+      "file_context": true,
+      "vision": true,
+      "file_upload": true,
+      "web_search": true,
+      "image_generation": true,
+      "code_interpreter": true,
+      "citations": true,
+      "status_updates": true,
+      "builtin_tools": true
+    },
+    "defaultFeatureIds": [
+      "web_search"
+    ]
+  }
 }

@@ -568,7 +568,9 @@ def status() -> None:
     # Docker containers
     if shutil.which("docker"):
         engines = [f"loki-{service}" for service in config.engine_services()]
-        for name in ("loki-gateway", *engines, "loki-open-webui", "loki-caddy", "loki-kiwix"):
+        kokoro = ["loki-kokoro"] if config.tts.enabled else []
+        names = ("loki-gateway", *engines, *kokoro, "loki-open-webui", "loki-caddy", "loki-kiwix")
+        for name in names:
             result = subprocess.run(
                 ["docker", "inspect", "--format", "{{.State.Status}}", name],
                 capture_output=True,

@@ -15,6 +15,7 @@ from loki.config import (
     LokiConfig,
     PortsConfig,
     StrataConfig,
+    TtsConfig,
     build_caddyfile,
     build_engines_compose,
     build_env_file,
@@ -368,6 +369,23 @@ def test_build_engines_compose_runs_image_engines_with_their_args(tmp_path):
     assert qwen["command"] == ["--diffusion-model", "/m/q.gguf", "--steps", "20"]
     assert qwen["volumes"] == [f"{tmp_path}:{tmp_path}:ro"]
     assert qwen["devices"] == ["/dev/kfd", "/dev/dri"]
+
+
+def test_build_engines_compose_runs_kokoro_on_the_cpu(tmp_path):
+    """Enabled Kokoro runs its published image with the default voice and no GPU devices."""
+    tts = TtsConfig(enabled=True, image="kokoro:cpu", voice="bf_emma")
+
+    text = build_engines_compose(LokiConfig(tts=tts), IMAGES, tmp_path)
+
+    assert yaml.safe_load(text)["services"] == {
+        "kokoro": {
+            "image": "kokoro:cpu",
+            "container_name": "loki-kokoro",
+            "restart": "unless-stopped",
+            "environment": ["API_LOG_LEVEL=WARNING", "DEFAULT_VOICE=bf_emma"],
+            "networks": ["loki-net"],
+        }
+    }
 
 
 def test_build_engines_compose_without_engines_has_no_services(tmp_path):
