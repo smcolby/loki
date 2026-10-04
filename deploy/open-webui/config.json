@@ -15,5 +15,6 @@
   "chat.context_compaction.enable": true,
   "chat.context_compaction.token_threshold": 114688,
   "chat.context_compaction.token_cap": 183500,
-  "chat.context_compaction.retention_percentage": 40
+  "chat.context_compaction.retention_percentage": 40,
+  "evaluation.arena.enable": false
 }

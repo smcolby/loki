@@ -13,7 +13,7 @@ The configuration of a working loki stack on one RX 7900 XTX (24 GB) with 32 GB 
 | `open-webui/config.json` | Open WebUI, **Admin Panel > Settings > Database > Import Config** |
 | `open-webui/models.json` | Open WebUI, **Workspace > Models > Import** |
 
-`open-webui/config.json` holds only the image generation, image editing, and context compaction settings, so importing it leaves every other setting alone. `open-webui/models.json` holds each model's parameters (reasoning effort, compaction threshold, native function calling), its Kiwix tool, and the Image Studio models' vision setting.
+`open-webui/config.json` holds only the image generation, image editing, and context compaction settings and turns off Arena models, so importing it leaves every other setting alone. `open-webui/models.json` holds each model's parameters (reasoning effort, compaction threshold, native function calling), its Kiwix tool, and the Image Studio models' vision setting.
 
 ## Model files
 
