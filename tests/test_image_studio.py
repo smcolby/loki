@@ -110,6 +110,21 @@ def test_message_text_joins_text_parts():
     assert studio_mod.message_text(message) == "a\nb"
 
 
+TITLE_TASK = (
+    "### Task:\nGenerate a concise title summarizing the chat history.\n"
+    "### Chat History:\n<chat_history>\n"
+    "USER: # REFERENCE IMAGES\nFour portrait photos are attached. They are the only source.\n"
+    "ASSISTANT: \n</chat_history>"
+)
+
+
+def test_title_comes_from_the_user_message_not_the_task_template():
+    """The title is the first sentence of the user's first non-heading line."""
+    reply = json.loads(studio_mod.task_reply("title_generation", TITLE_TASK))
+
+    assert reply == {"title": "Four portrait photos are attached"}
+
+
 @pytest.mark.parametrize(
     ("task", "expected"),
     [

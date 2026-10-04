@@ -175,10 +175,30 @@ def message_text(message: dict[str, Any]) -> str:
     )
 
 
+def chat_title(task_prompt: str) -> str:
+    """Return a chat title taken from the user's message in a title task's prompt.
+
+    Open WebUI's title prompt quotes the conversation between ``<chat_history>``
+    tags as ``USER:`` and ``ASSISTANT:`` lines. The title is the first sentence
+    of the user's first line that is not a Markdown heading, up to six words.
+    """
+    history = task_prompt.split("<chat_history>")[-1].split("</chat_history>")[0]
+    user = history.split("USER:", 1)[-1].split("\nASSISTANT:", 1)[0]
+    for line in user.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        sentence = line.split(". ", 1)[0].replace("*", "").replace('"', "")
+        words = sentence.split()[:6]
+        if words:
+            return " ".join(words).rstrip(".,:;!?")
+    return "Image"
+
+
 def task_reply(task: str, prompt: str) -> str:
     """Answer an Open WebUI background task without generating an image."""
     if task == "title_generation":
-        return json.dumps({"title": " ".join(prompt.split()[:6]) or "Image"})
+        return json.dumps({"title": chat_title(prompt)})
     if task == "tags_generation":
         return json.dumps({"tags": []})
     if task == "follow_up_generation":
