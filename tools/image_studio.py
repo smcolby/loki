@@ -23,6 +23,8 @@ import base64
 import importlib
 import io
 import json
+import re
+import secrets
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,6 +38,8 @@ MAX_REFERENCES = 10
 MAX_PIXELS = 1920 * 1280
 SIZE_MULTIPLE = 32
 REQUEST_TIMEOUT_S = 1800
+MAX_SEED = 2**31
+EXTRA_ARGS = re.compile(r"<sd_cpp_extra_args>(.*?)</sd_cpp_extra_args>", re.DOTALL)
 
 
 @dataclass(frozen=True)
@@ -157,10 +161,56 @@ def thread_end(
     return current_id
 
 
-def build_prompt(prompt: str, steps: int) -> str:
-    """Append sd-server's per-request arguments to ``prompt``."""
-    extra = json.dumps({"sample_params": {"sample_steps": steps}})
-    return f"{prompt}\n<sd_cpp_extra_args>{extra}</sd_cpp_extra_args>"
+def _merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Return ``base`` updated with ``override``, merging nested dictionaries."""
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def build_prompt(prompt: str, steps: int, seed: int) -> tuple[str, dict[str, Any]]:
+    """Attach sd-server's per-request arguments to ``prompt`` as one tag.
+
+    Any ``<sd_cpp_extra_args>`` tags already in the prompt are removed and
+    merged into the studio's step count and seed, with the prompt's values
+    taking precedence, so a user can pin a seed or change the steps.
+
+    Parameters
+    ----------
+    prompt : str
+        The user's message.
+    steps : int
+        The studio's sampling steps.
+    seed : int
+        The seed to use unless the prompt sets one.
+
+    Returns
+    -------
+    tuple of (str, dict)
+        The prompt with a single merged tag, and the merged arguments.
+
+    Raises
+    ------
+    ValueError
+        If a tag in the prompt does not contain a JSON object.
+    """
+    user_args: dict[str, Any] = {}
+    for match in EXTRA_ARGS.finditer(prompt):
+        try:
+            parsed = json.loads(match.group(1))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"<sd_cpp_extra_args> is not valid JSON: {exc}") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError("<sd_cpp_extra_args> must contain a JSON object")
+        user_args = _merge(user_args, parsed)
+
+    args = _merge({"seed": seed, "sample_params": {"sample_steps": steps}}, user_args)
+    text = EXTRA_ARGS.sub("", prompt).rstrip()
+    return f"{text}\n<sd_cpp_extra_args>{json.dumps(args)}</sd_cpp_extra_args>", args
 
 
 def message_text(message: dict[str, Any]) -> str:
@@ -264,6 +314,7 @@ class Pipe:
             thread.pop()
         try:
             urls = select_images(studio, thread)
+            request_prompt, args = build_prompt(prompt, studio.steps, secrets.randbelow(MAX_SEED))
         except ValueError as exc:
             return str(exc)
 
@@ -274,7 +325,7 @@ class Pipe:
 
         started = time.monotonic()
         try:
-            png = await self._generate(build_prompt(prompt, studio.steps), size, images)
+            png = await self._generate(request_prompt, size, images)
         except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
             await self._status(__event_emitter__, "Image generation failed", done=True)
             return f"Image generation failed: {exc}"
@@ -288,7 +339,8 @@ class Pipe:
                 {"type": "files", "data": {"files": [{"type": "image", **file}]}}
             )
         await self._status(__event_emitter__, f"{label}, {seconds:.0f} s", done=True)
-        return f"{label}, {studio.steps} steps, {seconds:.0f} s"
+        steps = args.get("sample_params", {}).get("sample_steps", studio.steps)
+        return f"{label}, {steps} steps, seed {args['seed']}, {seconds:.0f} s"
 
     async def _generate(
         self, prompt: str, size: tuple[int, int], images: list[tuple[bytes, str]]

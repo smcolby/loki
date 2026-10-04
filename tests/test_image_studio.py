@@ -88,13 +88,35 @@ def test_thread_end_finds_the_answered_user_message(messages_map, expected):
     assert studio_mod.thread_end(messages_map, "a", "current") == expected
 
 
-def test_build_prompt_appends_step_count():
-    """The prompt carries the studio's step count as sd-server extra args."""
-    prompt = studio_mod.build_prompt("a fox", 40)
+def _tag(prompt: str) -> dict:
+    """Return the JSON of the single sd-server tag in ``prompt``."""
+    assert prompt.count("<sd_cpp_extra_args>") == 1
+    return json.loads(prompt.split("<sd_cpp_extra_args>")[1].split("</sd_cpp_extra_args>")[0])
+
+
+def test_build_prompt_appends_steps_and_seed():
+    """The prompt carries the studio's step count and seed as sd-server extra args."""
+    prompt, args = studio_mod.build_prompt("a fox", 40, 1234)
 
     assert prompt.startswith("a fox\n<sd_cpp_extra_args>")
-    tag = prompt.split("<sd_cpp_extra_args>")[1].split("</sd_cpp_extra_args>")[0]
-    assert json.loads(tag) == {"sample_params": {"sample_steps": 40}}
+    assert _tag(prompt) == args == {"seed": 1234, "sample_params": {"sample_steps": 40}}
+
+
+def test_build_prompt_merges_the_users_tag_with_user_values_winning():
+    """A tag in the message is folded into one tag, and its seed and steps take precedence."""
+    tag = json.dumps({"seed": 7, "sample_params": {"sample_steps": 20}})
+    message = f"a fox\n<sd_cpp_extra_args>{tag}</sd_cpp_extra_args>"
+
+    prompt, args = studio_mod.build_prompt(message, 40, 1234)
+
+    assert prompt.startswith("a fox\n<sd_cpp_extra_args>")
+    assert _tag(prompt) == args == {"seed": 7, "sample_params": {"sample_steps": 20}}
+
+
+def test_build_prompt_rejects_an_invalid_tag():
+    """A tag that is not JSON fails with a message naming the problem."""
+    with pytest.raises(ValueError, match="sd_cpp_extra_args"):
+        studio_mod.build_prompt("a fox <sd_cpp_extra_args>{seed: 7}</sd_cpp_extra_args>", 40, 1)
 
 
 def test_message_text_joins_text_parts():
