@@ -232,9 +232,9 @@ def setup() -> None:
     ``LOKI_ROOT`` shell-profile export. Then writes the Caddyfile, ``.env``,
     ``compose.engines.yaml``, and ``models.ini``, offers to build any missing
     local images (gateway, llama-server, and Strata or sd-server when they
-    have engines), and
-    downloads any ZIM files listed
-    in ``config.yaml``.
+    have engines), and downloads any ZIM files listed in ``config.yaml``.
+    Stops before building or downloading if a Strata engine config is missing
+    or a model preset is invalid.
     """
     config_path = loki_root() / "config.yaml"
     if not config_path.exists():
@@ -337,8 +337,9 @@ def setup() -> None:
 
     click.echo("")
 
-    # Write the Caddyfile, .env, and models.ini
-    _write_generated_files(config)
+    # Write the generated files, stopping before builds and downloads if one cannot be written
+    if not _write_generated_files(config):
+        raise SystemExit(1)
     ports = config.ports
     click.echo(f"Caddyfile written for http://{config.url}")
     click.echo(
