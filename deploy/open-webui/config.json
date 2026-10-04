@@ -24,5 +24,21 @@
   "audio.tts.voice": "af_heart",
   "audio.tts.openai.params": {
     "speed": 1.2
+  },
+  "models.default_metadata": {
+    "capabilities": {
+      "file_context": true,
+      "vision": true,
+      "file_upload": true,
+      "web_search": true,
+      "image_generation": true,
+      "code_interpreter": true,
+      "citations": true,
+      "status_updates": true,
+      "builtin_tools": true
+    },
+    "defaultFeatureIds": [
+      "web_search"
+    ]
   }
 }
