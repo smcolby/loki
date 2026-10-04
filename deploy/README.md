@@ -13,7 +13,7 @@ The configuration of a working loki stack on one RX 7900 XTX (24 GB) with 32 GB 
 | `open-webui/config.json` | Open WebUI, **Admin Panel > Settings > Database > Import Config** |
 | `open-webui/models.json` | Open WebUI, **Workspace > Models > Import** |
 
-`open-webui/config.json` holds only the image generation, image editing, and context compaction settings, so importing it leaves every other setting alone. `open-webui/models.json` holds each model's parameters (reasoning effort, compaction threshold, native function calling), its Kiwix tool, and the Image Studio model.
+`open-webui/config.json` holds only the image generation, image editing, and context compaction settings, so importing it leaves every other setting alone. `open-webui/models.json` holds each model's parameters (reasoning effort, compaction threshold, native function calling), its Kiwix tool, and the Image Studio models' vision setting.
 
 ## Model files
 
@@ -49,6 +49,7 @@ The Strata engines also read files that Strata's tools build from those shards. 
 4. Copy `config.yaml` to the repository root, replace `/home/you`, and run `loki setup`.
 5. In Open WebUI, create the admin account, then:
    - add `tools/kiwix_tool.py` under **Workspace > Tools** with the ID `local_kiwix_search`;
+   - add `tools/image_studio.py` under **Admin Panel > Functions** with the ID `image_studio` and enable it;
    - import `open-webui/config.json` and `open-webui/models.json`;
    - enter a web search provider and its key under **Admin Panel > Settings > Web Search**, if you use one;
    - paste your system prompt under **Settings > General > System Prompt**.
