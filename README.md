@@ -119,7 +119,7 @@ Each engine runs in its own container as Compose service `strata-<name>`, define
 
 Only one engine holds the GPU at a time. The first request for a model on the other engine waits for in-flight requests to finish, unloads the current engine's models, and then loads the requested one.
 
-Strata's web dashboard (a live monitor of the model, GPU, CPU, and RAM, plus its settings) is at `http://loki.local/strata/`. Each Strata engine runs its own dashboard, so the gateway shows the one holding the GPU, or the most recently used one while an image or llama model holds it. It is read-only: its chat would bypass the gateway's GPU arbitration and its settings form would change the engine, so the gateway refuses anything but `GET`.
+Strata's web dashboard (a live monitor of the model, GPU, CPU, and RAM, plus its settings) is at `http://loki.local/strata/`. Each Strata engine runs its own dashboard, so the gateway shows the one holding the GPU, or the most recently used one while an image or llama model holds it. It opens on the Monitor tab and is read-only: its chat would bypass the gateway's GPU arbitration and its settings form would change the engine, so the gateway refuses anything but `GET`.
 
 To have a model ready for the first prompt, name it under `preload` at the top level of `config.yaml`:
 

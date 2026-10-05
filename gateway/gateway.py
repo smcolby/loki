@@ -47,6 +47,10 @@ TEXT_PATHS = (
     "/v1/messages/count_tokens",
 )
 IMAGE_PATHS = ("/v1/images/generations", "/v1/images/edits")
+# Opens the dashboard on its Monitor tab; it reads the tab from the URL fragment at load
+MONITOR_FIRST = (
+    b"<head><script>location.hash || history.replaceState(null, '', '#monitor')</script>"
+)
 MODEL_LIST_TTL = 30.0
 UNLOAD_TIMEOUT = 120.0
 POLL_INTERVAL = 0.5
@@ -556,7 +560,8 @@ async def handle_dashboard(request: web.Request) -> web.StreamResponse:
     Each Strata engine runs its own dashboard for its own model, so ``/strata/``
     follows the live one, or the most recently used one while an image or llama
     model holds the GPU. Only reads pass: the dashboard's chat would bypass the
-    GPU arbiter and its settings form would change the engine.
+    GPU arbiter and its settings form would change the engine. The start page
+    opens on the Monitor tab instead of Chat.
     """
     gateway: Gateway = request.app["gateway"]
     engines = {engine.name: engine for engine in gateway.engines if engine.dashboard}
@@ -572,9 +577,24 @@ async def handle_dashboard(request: web.Request) -> web.StreamResponse:
     recent = [name for name in reversed(gateway.arbiter.recent) if name in engines]
     engine = engines[recent[0] if recent else next(iter(engines))]
     path = "/" + request.match_info["tail"]
+    if path == "/" and request.method == "GET":
+        return await _dashboard_page(engine)
     if request.query_string:
         path += "?" + request.query_string
     return await _forward(request, engine, b"", path)
+
+
+async def _dashboard_page(engine: Engine) -> web.Response:
+    """Return the dashboard's start page set to open on Monitor, since its Chat tab is blocked."""
+    try:
+        async with engine.session.get(engine.url + "/") as upstream:
+            page = await upstream.read()
+            status, content_type = upstream.status, upstream.content_type
+    except (ClientError, TimeoutError) as exc:
+        return api_error(502, f"{engine.name} dashboard request failed: {exc}", "server_error")
+    if status == 200 and content_type == "text/html":
+        page = page.replace(b"<head>", MONITOR_FIRST, 1)
+    return web.Response(body=page, status=status, content_type=content_type, charset="utf-8")
 
 
 def build_app(engines: list[Engine], preload_model: str = "") -> web.Application:

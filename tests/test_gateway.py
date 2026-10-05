@@ -32,7 +32,13 @@ class FakeEngine:
         app.router.add_post("/v1/images/generations", self.generate)
         app.router.add_post("/v1/images/edits", self.edit)
         app.router.add_get("/metrics", self.metrics)
+        app.router.add_get("/", self.page)
         return app
+
+    async def page(self, _: web.Request) -> web.Response:
+        """Serve a dashboard start page naming this engine's first model."""
+        body = f"<!doctype html><html><head><title>{self.models[0]}</title></head></html>"
+        return web.Response(text=body, content_type="text/html")
 
     async def metrics(self, request: web.Request) -> web.Response:
         """Answer a dashboard read with this engine's models, recording the query."""
@@ -640,3 +646,14 @@ async def test_dashboard_without_strata_engines_is_not_found(make_client, llama)
     response = await client.get("/strata/")
 
     assert response.status == 404
+
+
+async def test_dashboard_page_opens_on_the_monitor_tab(client):
+    """The start page sets #monitor before the dashboard's script picks its first tab."""
+    response = await client.get("/strata/")
+    page = await response.text()
+
+    assert response.status == 200
+    assert page.startswith("<!doctype html><html><head><script>")
+    assert "'#monitor'" in page
+    assert "<title>flash</title>" in page
