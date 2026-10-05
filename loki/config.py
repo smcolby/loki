@@ -570,7 +570,8 @@ def build_engines_compose(config: LokiConfig, images: dict[str, str], root: Path
 
     Every Strata service runs the same image and mounts ``data_dir`` read-only
     at its host path, so paths inside an engine config resolve unchanged; only
-    the engine config mounted at ``/etc/strata/strata.json`` differs. Every
+    the engine config mounted at ``/etc/strata/strata.json`` and the Host name
+    the server accepts (its service name, which the gateway calls it by) differ. Every
     image service runs the sd-server image, mounts ``models_dir`` the same way,
     and passes its engine's arguments as the container command. Kokoro runs
     its published CPU image with no GPU devices, so it never contends with the
@@ -611,6 +612,8 @@ def build_engines_compose(config: LokiConfig, images: dict[str, str], root: Path
             "devices": ["/dev/kfd", "/dev/dri"],
             "security_opt": ["seccomp=unconfined"],
             "ulimits": {"memlock": -1},
+            # Strata answers only Host names it knows, and the gateway calls it by service name
+            "environment": [f"STRATA_ALLOWED_HOSTS={service}"],
             "volumes": [
                 f"{data_dir}:{data_dir}:ro",
                 {

@@ -341,6 +341,7 @@ def test_build_engines_compose_runs_one_container_per_strata_engine(tmp_path):
     assert swift["volumes"][0] == f"{tmp_path}:{tmp_path}:ro"
     assert swift["volumes"][1]["source"] == str(tmp_path / "configs" / "swift.json")
     assert swift["volumes"][1]["target"] == "/etc/strata/strata.json"
+    assert swift["environment"] == ["STRATA_ALLOWED_HOSTS=strata-swift"]
     assert swift["networks"] == ["loki-net"]
     assert "&" not in text
 
