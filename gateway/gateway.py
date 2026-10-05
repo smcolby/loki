@@ -47,9 +47,11 @@ TEXT_PATHS = (
     "/v1/messages/count_tokens",
 )
 IMAGE_PATHS = ("/v1/images/generations", "/v1/images/edits")
-# Opens the dashboard on its Monitor tab; it reads the tab from the URL fragment at load
-MONITOR_FIRST = (
+# Opens the dashboard on its Monitor tab (it reads the tab from the URL fragment at
+# load) and hides the Chat tab, whose requests the read-only route refuses
+DASHBOARD_HEAD = (
     b"<head><script>location.hash || history.replaceState(null, '', '#monitor')</script>"
+    b'<style>.st-tab[data-tab="chat"] { display: none; }</style>'
 )
 MODEL_LIST_TTL = 30.0
 UNLOAD_TIMEOUT = 120.0
@@ -561,7 +563,7 @@ async def handle_dashboard(request: web.Request) -> web.StreamResponse:
     follows the live one, or the most recently used one while an image or llama
     model holds the GPU. Only reads pass: the dashboard's chat would bypass the
     GPU arbiter and its settings form would change the engine. The start page
-    opens on the Monitor tab instead of Chat.
+    opens on the Monitor tab and hides Chat.
     """
     gateway: Gateway = request.app["gateway"]
     engines = {engine.name: engine for engine in gateway.engines if engine.dashboard}
@@ -585,7 +587,7 @@ async def handle_dashboard(request: web.Request) -> web.StreamResponse:
 
 
 async def _dashboard_page(engine: Engine) -> web.Response:
-    """Return the dashboard's start page set to open on Monitor, since its Chat tab is blocked."""
+    """Return the dashboard's start page, opening on Monitor with the blocked Chat tab hidden."""
     try:
         async with engine.session.get(engine.url + "/") as upstream:
             page = await upstream.read()
@@ -593,7 +595,7 @@ async def _dashboard_page(engine: Engine) -> web.Response:
     except (ClientError, TimeoutError) as exc:
         return api_error(502, f"{engine.name} dashboard request failed: {exc}", "server_error")
     if status == 200 and content_type == "text/html":
-        page = page.replace(b"<head>", MONITOR_FIRST, 1)
+        page = page.replace(b"<head>", DASHBOARD_HEAD, 1)
     return web.Response(body=page, status=status, content_type=content_type, charset="utf-8")
 
 

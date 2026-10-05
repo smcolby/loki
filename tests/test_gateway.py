@@ -648,12 +648,13 @@ async def test_dashboard_without_strata_engines_is_not_found(make_client, llama)
     assert response.status == 404
 
 
-async def test_dashboard_page_opens_on_the_monitor_tab(client):
-    """The start page sets #monitor before the dashboard's script picks its first tab."""
+async def test_dashboard_page_opens_on_the_monitor_tab_without_chat(client):
+    """The start page sets #monitor before the dashboard's script runs and hides the Chat tab."""
     response = await client.get("/strata/")
     page = await response.text()
 
     assert response.status == 200
     assert page.startswith("<!doctype html><html><head><script>")
     assert "'#monitor'" in page
+    assert '.st-tab[data-tab="chat"] { display: none; }' in page
     assert "<title>flash</title>" in page
