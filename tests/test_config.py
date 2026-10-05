@@ -165,6 +165,14 @@ def test_build_caddyfile_contains_url():
     assert "reverse_proxy open-webui:8080" in result
 
 
+def test_build_caddyfile_sends_the_strata_dashboard_to_the_gateway():
+    """Paths under /strata go to the gateway, ahead of the Open WebUI catch-all."""
+    result = build_caddyfile("loki.local")
+
+    assert "\thandle /strata* {\n\t\treverse_proxy gateway:8080" in result
+    assert result.index("gateway:8080") < result.index("open-webui:8080")
+
+
 def test_build_caddyfile_uses_custom_url():
     """build_caddyfile uses the provided URL, not the default."""
     result = build_caddyfile("myserver.local")

@@ -6,7 +6,8 @@ model lists, sends each request to the engine that owns the requested model,
 and unloads every other engine's models before the first request to a
 different engine. Requests to the engine that already holds the GPU pass
 straight through; a request for another engine waits for in-flight requests to
-finish, then swaps. An optional preload loads one text model at startup.
+finish, then swaps. An optional preload loads one text model at startup, and
+``/strata/`` serves the live Strata engine's web dashboard read-only.
 """
 
 import asyncio
@@ -77,9 +78,11 @@ class Engine:
         Shared client session for engine requests.
     """
 
-    # Request paths the engine serves, and whether /v1/models lists its models
+    # Request paths the engine serves, whether /v1/models lists its models, and
+    # whether it serves Strata's web dashboard
     paths: ClassVar[tuple[str, ...]] = TEXT_PATHS
     listed: ClassVar[bool] = True
+    dashboard: ClassVar[bool] = False
 
     name: str
     url: str
@@ -174,6 +177,8 @@ class LlamaEngine(Engine):
 class StrataEngine(Engine):
     """Strata's server, which serves one model and unloads it on request."""
 
+    dashboard: ClassVar[bool] = True
+
     async def loaded(self) -> bool:
         """Report whether the engine process is running."""
         body = await self._get_json("/health")
@@ -201,6 +206,7 @@ class ImageEngine(StrataEngine):
 
     paths: ClassVar[tuple[str, ...]] = IMAGE_PATHS
     listed: ClassVar[bool] = False
+    dashboard: ClassVar[bool] = False
 
     model_id: str
 
@@ -226,6 +232,7 @@ class Arbiter:
 
     engines: list[Engine]
     active: str | None = None
+    recent: list[str] = field(default_factory=list)
     inflight: int = 0
     waiting: dict[str, int] = field(default_factory=dict)
     _cond: asyncio.Condition = field(default_factory=asyncio.Condition)
@@ -262,6 +269,11 @@ class Arbiter:
                         log.info("unloading %s before %s", other.name, engine.name)
                         await other.unload()
                 self.active = engine.name
+
+                # Remember the order engines held the GPU, most recent last
+                if engine.name in self.recent:
+                    self.recent.remove(engine.name)
+                self.recent.append(engine.name)
             self.inflight += 1
 
     async def release(self) -> None:
@@ -360,18 +372,32 @@ async def handle_models(request: web.Request) -> web.Response:
     return web.json_response({"object": "list", "data": listed})
 
 
-async def _forward(request: web.Request, engine: Engine, body: bytes) -> web.StreamResponse:
+async def _forward(
+    request: web.Request, engine: Engine, body: bytes, path: str | None = None
+) -> web.StreamResponse:
     """Stream one request to ``engine`` and its response back to the client.
 
     A failure before the engine answers becomes a 502; a failure mid-stream
     ends the response early, since its status line is already sent.
+
+    Parameters
+    ----------
+    request : web.Request
+        Client request whose method and headers are forwarded.
+    engine : Engine
+        Engine that receives the request.
+    body : bytes
+        Request body, forwarded unchanged.
+    path : str or None, optional
+        Engine path and query to request; the client's own path when None (the
+        default).
     """
     headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP_BY_HOP}
     response: web.StreamResponse | None = None
     try:
         async with engine.session.request(
             request.method,
-            engine.url + request.rel_url.path_qs,
+            engine.url + (path if path is not None else request.rel_url.path_qs),
             headers=headers,
             data=body,
             auto_decompress=False,
@@ -524,6 +550,33 @@ async def preload(gateway: Gateway, model_id: str) -> None:
         await arbiter.release()
 
 
+async def handle_dashboard(request: web.Request) -> web.StreamResponse:
+    """Serve Strata's web dashboard, read-only, from the Strata engine that last held the GPU.
+
+    Each Strata engine runs its own dashboard for its own model, so ``/strata/``
+    follows the live one, or the most recently used one while an image or llama
+    model holds the GPU. Only reads pass: the dashboard's chat would bypass the
+    GPU arbiter and its settings form would change the engine.
+    """
+    gateway: Gateway = request.app["gateway"]
+    engines = {engine.name: engine for engine in gateway.engines if engine.dashboard}
+    if not engines:
+        return api_error(404, "no Strata engine is configured")
+
+    # Redirect to the trailing slash, which the dashboard's relative paths need
+    if request.path == "/strata":
+        raise web.HTTPPermanentRedirect("/strata/")
+    if request.method not in ("GET", "HEAD"):
+        return api_error(405, "the Strata dashboard is read-only through the gateway")
+
+    recent = [name for name in reversed(gateway.arbiter.recent) if name in engines]
+    engine = engines[recent[0] if recent else next(iter(engines))]
+    path = "/" + request.match_info["tail"]
+    if request.query_string:
+        path += "?" + request.query_string
+    return await _forward(request, engine, b"", path)
+
+
 def build_app(engines: list[Engine], preload_model: str = "") -> web.Application:
     """Create the gateway application around ``engines``.
 
@@ -541,6 +594,8 @@ def build_app(engines: list[Engine], preload_model: str = "") -> web.Application
     app.router.add_get("/v1/models", handle_models)
     for path in (*TEXT_PATHS, *IMAGE_PATHS):
         app.router.add_post(path, handle_inference)
+    app.router.add_route("*", "/strata", handle_dashboard)
+    app.router.add_route("*", "/strata/{tail:.*}", handle_dashboard)
 
     # Run the preload beside request handling and stop it on shutdown
     if preload_model:

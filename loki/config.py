@@ -507,7 +507,10 @@ def image_names(config: LokiConfig, gateway: str) -> dict[str, str]:
 
 
 def build_caddyfile(caddy_url: str) -> str:
-    """Return the Caddyfile content that routes a URL to Open WebUI.
+    """Return the Caddyfile content that routes a URL to Open WebUI and the Strata dashboard.
+
+    ``/strata`` and everything under it go to the gateway, which serves the live
+    Strata engine's dashboard; every other path goes to Open WebUI.
 
     Parameters
     ----------
@@ -520,9 +523,14 @@ def build_caddyfile(caddy_url: str) -> str:
         Caddyfile configuration as a string.
     """
     return (
-        f"# Route traffic for the configured local URL to Open WebUI.\n"
+        f"# Route the Strata dashboard to the gateway and everything else to Open WebUI.\n"
         f"http://{caddy_url} {{\n"
-        f"    reverse_proxy open-webui:8080\n"
+        f"\thandle /strata* {{\n"
+        f"\t\treverse_proxy gateway:8080\n"
+        f"\t}}\n"
+        f"\thandle {{\n"
+        f"\t\treverse_proxy open-webui:8080\n"
+        f"\t}}\n"
         f"}}\n"
     )
 

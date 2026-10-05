@@ -31,7 +31,13 @@ class FakeEngine:
         app.router.add_post("/v1/chat/completions", self.chat)
         app.router.add_post("/v1/images/generations", self.generate)
         app.router.add_post("/v1/images/edits", self.edit)
+        app.router.add_get("/metrics", self.metrics)
         return app
+
+    async def metrics(self, request: web.Request) -> web.Response:
+        """Answer a dashboard read with this engine's models, recording the query."""
+        self.calls.append(f"metrics:{request.query_string}")
+        return web.json_response({"models": self.models})
 
     async def list_models(self, _: web.Request) -> web.Response:
         """List models with llama-server style status objects."""
@@ -564,3 +570,73 @@ async def test_app_preloads_its_model_at_startup(
     await session.close()
 
     assert strata.calls == ["chat:flash"]
+
+
+async def _dashboard_models(client, path: str = "/strata/metrics") -> list[str]:
+    """Read the dashboard's metrics through the gateway and return the answering engine's models."""
+    response = await client.get(path)
+    assert response.status == 200
+    return (await response.json())["models"]
+
+
+async def test_dashboard_follows_the_strata_engine_holding_the_gpu(make_client, llama, strata):
+    """/strata/ reaches the live Strata engine, passing the path and query through."""
+    swift = FakeEngine(["swift"])
+    client = await make_client(llama=llama, strata=strata, **{"strata-swift": swift})
+
+    await _complete(client, "swift")
+
+    assert await _dashboard_models(client, "/strata/metrics?requests=all") == ["swift"]
+    assert swift.calls[-1] == "metrics:requests=all"
+
+
+async def test_dashboard_keeps_the_last_strata_engine_while_another_kind_holds_the_gpu(
+    make_client, llama, strata
+):
+    """An image or llama model on the GPU leaves the dashboard on the last Strata engine used."""
+    swift = FakeEngine(["swift"])
+    image = FakeEngine(["qwen-image"])
+    client = await make_client(
+        llama=llama, strata=strata, **{"strata-swift": swift, "image-qwen": image}
+    )
+
+    await _complete(client, "swift")
+    await _complete(client, "flash")
+    await client.post("/v1/images/generations", json=_generate("qwen-image"))
+    await _complete(client, "qwen")
+
+    assert await _dashboard_models(client) == ["flash"]
+
+
+async def test_dashboard_starts_on_the_first_strata_engine(make_client, llama, strata):
+    """Before any Strata engine has held the GPU, the dashboard shows the first one."""
+    client = await make_client(
+        llama=llama, strata=strata, **{"strata-swift": FakeEngine(["swift"])}
+    )
+
+    assert await _dashboard_models(client) == ["flash"]
+
+
+async def test_dashboard_rejects_writes(client, strata):
+    """The dashboard's chat and settings writes never reach the engine."""
+    response = await client.post("/strata/v1/chat/completions", json=_chat("flash"))
+
+    assert response.status == 405
+    assert strata.calls == []
+
+
+async def test_dashboard_redirects_to_the_trailing_slash(client):
+    """/strata redirects to /strata/, which the dashboard's relative paths need."""
+    response = await client.get("/strata", allow_redirects=False)
+
+    assert response.status == 308
+    assert response.headers["Location"] == "/strata/"
+
+
+async def test_dashboard_without_strata_engines_is_not_found(make_client, llama):
+    """A stack without Strata has no dashboard to serve."""
+    client = await make_client(llama=llama)
+
+    response = await client.get("/strata/")
+
+    assert response.status == 404
