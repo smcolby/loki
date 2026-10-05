@@ -30,5 +30,11 @@
  "model_name": "swift-qwen3.8-flash-next-iq2_xs",
  "env": {
   "STRATA_RESIDENT_PIN": "1"
+ },
+ "sampling": {
+  "temperature": 1.0,
+  "top_p": 0.95,
+  "top_k": 20,
+  "min_p": 0.0
  }
 }
