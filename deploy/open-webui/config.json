@@ -23,7 +23,7 @@
   "audio.tts.model": "kokoro",
   "audio.tts.voice": "af_heart",
   "audio.tts.openai.params": {
-    "speed": 1.2
+    "speed": 1.3
   },
   "models.default_metadata": {
     "capabilities": {
@@ -40,5 +40,6 @@
     "defaultFeatureIds": [
       "web_search"
     ]
-  }
+  },
+  "audio.tts.split_on": "paragraphs"
 }
