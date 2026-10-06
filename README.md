@@ -53,7 +53,7 @@ llama:
 strata:
   engines: {}                                       # Engine name -> config file (see below).
   data_dir: ~/.llms/strata                          # Holds the engine configs and model files.
-  ref: 1678de333d0e0711bc414ad992b640e1a37dd814     # Strata commit to build.
+  ref: 6f32ec070f23ced9f50e704d854d775da52591ab     # Strata commit to build.
   gpu_targets: gfx1100
   rocm_version: 7.10.0a20251120                     # TheRock ROCm wheels.
 
@@ -111,11 +111,11 @@ Each engine runs in its own container as Compose service `strata-<name>`, define
   "args": ["--pack", "/home/you/.llms/strata/packs/iq2_xs", "--native", "/home/you/.llms/strata/models/model-00001-of-00002.gguf", "--max-context", "131072"],
   "tokenizer": "/home/you/.llms/strata/packs/iq2_xs/tokenizer",
   "model_name": "qwen3.8-flash-next-iq2_xs",
-  "env": {"STRATA_RESIDENT_PIN": "0"}
+  "env": {"STRATA_RESIDENT_PIN": "0", "STRATA_PREFILL_GROUP_GATHER": "0"}
 }
 ```
 
-`args` are Strata engine arguments, `model_name` is the model id clients request, and `env` (optional) sets engine environment variables. Use absolute paths inside `data_dir`, which is mounted read-only at the same path. The image supplies the engine binary, its libraries, and a hipBLASLt tuning table for `gpu_targets`, so an engine config must not set `exe`, `cwd`, `lib_dirs`, `backend`, or `log`. `loki start` stops with an error if a listed engine config is missing. All engines share one image, and an engine that is not loaded holds no GPU memory and little host RAM.
+`args` are Strata engine arguments, `model_name` is the model id clients request, and `env` (optional) sets engine environment variables. On gfx1100, set `STRATA_PREFILL_GROUP_GATHER` to `0`. Strata 0.1.38 and later gather each group's experts in one launch, which reads prompts about 30% slower on an RX 7900 XTX. With the gather off, 0.1.39 reads them 3% to 5% faster than 0.1.34. Use absolute paths inside `data_dir`, which is mounted read-only at the same path. The image supplies the engine binary, its libraries, and a hipBLASLt tuning table for `gpu_targets`, so an engine config must not set `exe`, `cwd`, `lib_dirs`, `backend`, or `log`. `loki start` stops with an error if a listed engine config is missing. All engines share one image, and an engine that is not loaded holds no GPU memory and little host RAM.
 
 Only one engine holds the GPU at a time. The first request for a model on the other engine waits for in-flight requests to finish, unloads the current engine's models, and then loads the requested one.
 

@@ -29,7 +29,8 @@
  "tokenizer": "/home/you/.llms/strata/packs/swift-iq2_xs/tokenizer",
  "model_name": "swift-qwen3.8-flash-next-iq2_xs",
  "env": {
-  "STRATA_RESIDENT_PIN": "1"
+  "STRATA_RESIDENT_PIN": "1",
+  "STRATA_PREFILL_GROUP_GATHER": "0"
  },
  "sampling": {
   "temperature": 1.0,
