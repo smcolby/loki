@@ -99,7 +99,7 @@ def test_cleanup_keeps_current_images(mocker, gateway_sources):
         {
             "loki-llama": [LLAMA.split(":")[1]],
             "loki-gateway": [gateway_tag(gateway_sources)],
-            "loki-strata": ["gfx1100-rocm7.10.0a20251120-1678de333d0e0711bc414ad992b640e1a37dd814"],
+            "loki-strata": ["gfx1100-rocm7.10.0a20251120-6f32ec070f23ced9f50e704d854d775da52591ab"],
         },
     )
 
