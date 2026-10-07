@@ -191,9 +191,13 @@ class StrataEngine(Engine):
         return bool(isinstance(body, dict) and body.get("loaded"))
 
     async def request_unload(self) -> None:
-        """Ask Strata to unload; a busy engine answers 409 and is retried."""
+        """Ask Strata to unload; a busy engine answers 409 and is retried.
+
+        Strata refuses control requests that are not JSON, so the request
+        carries an empty JSON body.
+        """
         try:
-            async with self.session.post(self.url + "/unload") as response:
+            async with self.session.post(self.url + "/unload", json={}) as response:
                 await response.read()
         except (ClientError, TimeoutError) as exc:
             raise EngineError(f"{self.name} unload failed: {exc}") from exc
