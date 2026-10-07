@@ -172,52 +172,9 @@
     "is_active": true
   },
   {
-    "id": "qwen3.8-flash-next-iq2_xs",
+    "id": "swift-qwen3.8-flash-next-iq3_xxs",
     "base_model_id": null,
-    "name": "qwen3.8-flash-next-iq2_xs",
-    "meta": {
-      "profile_image_url": "/static/favicon.png",
-      "description": null,
-      "capabilities": {
-        "file_context": true,
-        "vision": false,
-        "file_upload": true,
-        "web_search": true,
-        "image_generation": true,
-        "code_interpreter": true,
-        "citations": true,
-        "status_updates": true,
-        "builtin_tools": true
-      },
-      "knowledge": null,
-      "suggestion_prompts": null,
-      "tags": [],
-      "builtinTools": {
-        "time": true,
-        "memory": true,
-        "chats": true,
-        "notes": true,
-        "knowledge": true,
-        "channels": true,
-        "web_search": true,
-        "image_generation": true,
-        "code_interpreter": true
-      },
-      "toolIds": [
-        "local_kiwix_search"
-      ]
-    },
-    "params": {
-      "function_calling": "native",
-      "compact_token_threshold": 183500,
-      "reasoning_effort": "low"
-    },
-    "is_active": true
-  },
-  {
-    "id": "swift-qwen3.8-flash-next-iq2_xs",
-    "base_model_id": null,
-    "name": "swift-qwen3.8-flash-next-iq2_xs",
+    "name": "swift-qwen3.8-flash-next-iq3_xxs",
     "meta": {
       "profile_image_url": "/static/favicon.png",
       "description": null,

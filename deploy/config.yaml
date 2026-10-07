@@ -35,7 +35,6 @@ llama:
 strata:
   # Engine name -> engine config in data_dir; each runs as Compose service strata-<name>
   engines:
-    qwen: qwen.json
     swift: swift.json
   # Holds the engine configs (engine args, tokenizer, model name) and the files they name.
   data_dir: ~/.llms/strata
@@ -89,7 +88,7 @@ tts:
   voice: af_heart
 
 # Text model the gateway loads when it starts, so the first prompt skips the load
-preload: swift-qwen3.8-flash-next-iq2_xs
+preload: swift-qwen3.8-flash-next-iq3_xxs
 
 # ZIM archives to download during `loki setup`.
 # Each entry requires a name (used for display) and a direct download URL.

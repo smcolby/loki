@@ -9,7 +9,7 @@ The configuration of a working loki stack on one RX 7900 XTX (24 GB) with 32 GB 
 | `config.yaml` | `config.yaml` at the repository root |
 | `models/<model>/preset.ini` | `~/.llms/<model>/preset.ini` |
 | `models/muse-glimmer-30b-q4/chat-template.jinja` | `~/.llms/muse-glimmer-30b-q4/` |
-| `models/strata/qwen.json`, `swift.json` | `~/.llms/strata/` |
+| `models/strata/swift.json` | `~/.llms/strata/` |
 | `open-webui/config.json` | Open WebUI, **Admin Panel > Settings > Database > Import Config** |
 | `open-webui/models.json` | Open WebUI, **Workspace > Models > Import** |
 
@@ -32,12 +32,11 @@ Download each file into the directory shown, under `~/.llms`.
 | `qwen-image-2.1` | `Qwen3-VL-8B-Instruct-UD-Q4_K_XL.gguf` | `unsloth/Qwen3-VL-8B-Instruct-GGUF` |
 | `qwen-image-2.1` | `Qwen3-VL-8B-Instruct-mmproj-F16.gguf` | `unsloth/Qwen3-VL-8B-Instruct-GGUF`, saved from `mmproj-F16.gguf` |
 | `qwen-image-2.1` | `qwen_image_2.1_vae_bf16.safetensors` | `unsloth/Qwen-Image-2.1-FP8`, `vae/` |
-| `strata/models/IQ2_XS` | both `Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS-0000N-of-00002.gguf` shards | `ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF`, `IQ2_XS/` |
-| `strata/models/swift-IQ2_XS` | both `Swift-Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS-0000N-of-00002.gguf` shards | `ukisai/Swift-1.5-Qwen3.8-Flash-Next-GSQ-RCO-GGUF` |
+| `strata/models/swift-IQ3_XXS` | both `Swift-Qwen3.8-Flash-Next-GSQ-RCO-IQ3_XXS-0000N-of-00002.gguf` shards | `ukisai/Swift-1.5-Qwen3.8-Flash-Next-GSQ-RCO-GGUF` |
 
 The Strata engines also read files that Strata's tools build from those shards. Run the tools from the `loki-strata` image after `loki setup` builds it, with `~/.llms/strata` mounted writable:
 
-- `packs/iq2_xs` and `packs/swift-iq2_xs`: `/opt/strata/tools/iq_pack.py --gguf <first shard> --out <pack directory> --experts-bin`, once per model.
+- `packs/swift-iq3_xxs`: `/opt/strata/tools/iq_pack.py --gguf <first shard> --out <pack directory>`. The engine reads the experts from the GGUF shards, so the pack needs no `experts.bin`.
 - `mtp/rt`: the multi-token prediction drafter, built with `/opt/strata/tools/mtp_fetch.py` and `mtp_pack.py` as described in Strata's `docs/DETAILS.md`.
 - `expert-profile.bin`: copy `data/expert-profile.bin` from the Strata image.
 
