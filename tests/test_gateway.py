@@ -65,8 +65,10 @@ class FakeEngine:
             self.loaded.discard(model)
         return web.json_response({"success": True})
 
-    async def unload_strata(self, _: web.Request) -> web.Response:
-        """Unload the single model."""
+    async def unload_strata(self, request: web.Request) -> web.Response:
+        """Unload the single model, refusing a request that is not JSON as Strata does."""
+        if request.content_type != "application/json":
+            return web.json_response({"error": {"message": "send application/json"}}, status=415)
         self.calls.append("unload")
         if not self.stick:
             self.loaded.clear()
