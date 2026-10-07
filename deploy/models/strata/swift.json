@@ -1,11 +1,11 @@
 {
  "args": [
   "--pack",
-  "/home/you/.llms/strata/packs/swift-iq2_xs",
+  "/home/you/.llms/strata/packs/swift-iq3_xxs",
   "--native",
-  "/home/you/.llms/strata/models/swift-IQ2_XS/Swift-Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS-00001-of-00002.gguf",
+  "/home/you/.llms/strata/models/swift-IQ3_XXS/Swift-Qwen3.8-Flash-Next-GSQ-RCO-IQ3_XXS-00001-of-00002.gguf",
   "--ple-gguf",
-  "/home/you/.llms/strata/models/swift-IQ2_XS/Swift-Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS-00001-of-00002.gguf",
+  "/home/you/.llms/strata/models/swift-IQ3_XXS/Swift-Qwen3.8-Flash-Next-GSQ-RCO-IQ3_XXS-00001-of-00002.gguf",
   "--expert-profile",
   "/home/you/.llms/strata/expert-profile.bin",
   "--expert-cache",
@@ -22,12 +22,11 @@
   "262144",
   "--kv",
   "int8",
-  "--resident-experts",
   "--kv-resident",
   "32768"
  ],
- "tokenizer": "/home/you/.llms/strata/packs/swift-iq2_xs/tokenizer",
- "model_name": "swift-qwen3.8-flash-next-iq2_xs",
+ "tokenizer": "/home/you/.llms/strata/packs/swift-iq3_xxs/tokenizer",
+ "model_name": "swift-qwen3.8-flash-next-iq3_xxs",
  "env": {
   "STRATA_RESIDENT_PIN": "1",
   "STRATA_PREFILL_GROUP_GATHER": "0"
