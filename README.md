@@ -163,6 +163,8 @@ image:
 
 `--width` and `--height` set the size of a request that names none; both must be multiples of 32. `--llm_vision`, `--strength`, and `--ref-image-args` matter only for edits (below). `--seed -1` picks a new random seed for every request. sd-server's default is the fixed seed 42, and Open WebUI never sends one, so every image would start from the same noise; an edit of a generated image then starts from the noise that made it, and the result comes out over-sharpened and over-contrasted. Each engine runs as Compose service `image-<name>` (container `loki-image-<name>`) in `compose.engines.yaml`, with `models_dir` mounted read-only at the same path, so use absolute paths inside it. Model ids use letters, digits, `.`, `_`, `:`, `/`, and `-`. All image engines share one image. sd-server keeps about 1.6 GiB of GPU memory after a generation, so a supervisor in the image starts it on the first request and stops it when another engine needs the GPU; the arguments must not set `--listen-ip` or `--listen-port`.
 
+A few-step checkpoint such as Qwen Image 2.1 Turbo runs on its own sigma schedule rather than one of sd-server's schedulers. Give its engine the same files with its own `--diffusion-model`, `--steps 8`, and `--sigmas 1.0,0.978453,0.95418,0.926626,0.89508,0.845148,0.704534,0.414568,0.0` (the checkpoint's eight sigmas plus the final 0). sd-server then runs one step per sigma for every request, whatever step count the request asks for. Leave `--cache-mode easycache` off for it: on Turbo, EasyCache skips 2 of the 8 steps and leaves visible grain and smeared detail (on the 40-step base model it skips 24 to 26 steps).
+
 Image models answer `POST /v1/images/generations` and `POST /v1/images/edits` on the model API and stay out of `/v1/models`, which chat clients read as their model list. A chat request for an image model, or an image request for a chat model, fails with HTTP 400. An image request takes the GPU like any other engine swap: it waits for in-flight text requests, unloads the text engines, and then generates. The next chat request stops sd-server and reloads its model.
 
 To generate images from Open WebUI, open **Admin Panel > Settings > Images**, choose the OpenAI engine, set the base URL to `http://gateway:8080/v1`, enter any API key, set the model to the image model id, and set the image size (Open WebUI always sends one, so the engine's default applies only to other clients).
@@ -171,15 +173,16 @@ Edits take reference images: `/v1/images/edits` is OpenAI's multipart form, with
 
 ### Image Studio
 
-[`tools/image_studio.py`](tools/image_studio.py) is an Open WebUI function that adds three image models. Each sends your message and images unchanged to the image engine, with no chat model rewriting the prompt or answering afterward:
+[`tools/image_studio.py`](tools/image_studio.py) is an Open WebUI function that adds six image models. Each sends your message and images unchanged to an image engine, with no chat model rewriting the prompt or answering afterward:
 
 | Model | Size | Images it sends |
 | --- | --- | --- |
 | Image Studio: Draft | 1248x832, 40 steps | the images attached to your message, if any |
 | Image Studio: Production | 1920x1280, 40 steps | the images attached to your message, if any |
 | Image Studio: Refine | the edited image's size, up to 1920x1280 | the most recent earlier image in the chat, then any images attached to your message |
+| Image Studio: Turbo Draft, Turbo Production, Turbo Refine | as above, 8 steps | as above |
 
-Draft is a quick preview of a Production image at the same step count, though a different size lays the scene out differently. Use Refine to change a result: describe only the change, and it edits the latest image without the original references. To install it, open **Admin Panel > Functions**, click **+**, paste the file, set the ID to `image_studio`, save, and enable it. Then enable **Vision** for each Image Studio model under **Admin Panel > Settings > Models**, so Open WebUI accepts attached images. It needs a saved chat (temporary chats are not supported).
+Draft, Production, and Refine use Qwen Image 2.1 (`qwen-image-2.1-q8_0`); the Turbo models use Qwen Image 2.1 Turbo (`qwen-image-2.1-turbo-q8_0`), which needs its own image engine (above). Draft is a quick preview of a Production image at the same step count, though a different size lays the scene out differently. Use Refine to change a result: describe only the change, and it edits the latest image without the original references. To install it, open **Admin Panel > Functions**, click **+**, paste the file, set the ID to `image_studio`, save, and enable it. Then enable **Vision** for each Image Studio model under **Admin Panel > Settings > Models**, so Open WebUI accepts attached images. It needs a saved chat (temporary chats are not supported).
 
 ## Setup
 

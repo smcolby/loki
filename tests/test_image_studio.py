@@ -14,9 +14,26 @@ def _message(role: str, *urls: str, text: str = "") -> dict:
     return {"role": role, "content": text, "files": files}
 
 
-def test_pipes_lists_the_three_studios():
-    """The manifold offers Draft, Production, and Refine."""
-    assert [p["id"] for p in studio_mod.Pipe().pipes()] == ["draft", "production", "refine"]
+def test_pipes_lists_the_base_and_turbo_studios():
+    """The manifold offers Draft, Production, and Refine, each also as Turbo."""
+    assert [p["id"] for p in studio_mod.Pipe().pipes()] == [
+        "draft",
+        "production",
+        "refine",
+        "turbo_draft",
+        "turbo_production",
+        "turbo_refine",
+    ]
+
+
+@pytest.mark.parametrize("key", ["draft", "production", "refine"])
+def test_turbo_studio_matches_its_base_studio_on_the_turbo_model(key):
+    """A Turbo studio keeps its base studio's size and mode, on Turbo at 8 steps."""
+    base, turbo = studio_mod.STUDIOS[key], studio_mod.STUDIOS[f"turbo_{key}"]
+
+    assert (base.model, base.steps) == ("qwen-image-2.1-q8_0", 40)
+    assert (turbo.model, turbo.steps) == ("qwen-image-2.1-turbo-q8_0", 8)
+    assert (turbo.size, turbo.refine) == (base.size, base.refine)
 
 
 @pytest.mark.parametrize(
@@ -170,7 +187,13 @@ async def gateway(aiohttp_server, monkeypatch):
         form = await request.post()
         images = [f.file.read() for f in form.getall("image[]")]
         seen.append(
-            {"path": "edits", "size": form["size"], "prompt": form["prompt"], "images": images}
+            {
+                "path": "edits",
+                "model": form["model"],
+                "size": form["size"],
+                "prompt": form["prompt"],
+                "images": images,
+            }
         )
         return web.json_response({"data": [{"b64_json": png}]})
 
@@ -192,18 +215,27 @@ async def gateway(aiohttp_server, monkeypatch):
 async def test_generate_with_references_sends_a_multipart_edit(gateway):
     """References go to /images/edits as image[] parts in order, with the studio's size."""
     result = await studio_mod.Pipe()._generate(
-        "prompt", (1248, 832), [(b"one", "image/png"), (b"two", "image/jpeg")]
+        "qwen-image-2.1-turbo-q8_0",
+        "prompt",
+        (1248, 832),
+        [(b"one", "image/png"), (b"two", "image/jpeg")],
     )
 
     assert result == b"png-bytes"
     assert gateway == [
-        {"path": "edits", "size": "1248x832", "prompt": "prompt", "images": [b"one", b"two"]}
+        {
+            "path": "edits",
+            "model": "qwen-image-2.1-turbo-q8_0",
+            "size": "1248x832",
+            "prompt": "prompt",
+            "images": [b"one", b"two"],
+        }
     ]
 
 
 async def test_generate_without_references_sends_a_generation(gateway):
-    """A text-only request goes to /images/generations for the image model."""
-    result = await studio_mod.Pipe()._generate("prompt", (1920, 1280), [])
+    """A text-only request goes to /images/generations for the studio's image model."""
+    result = await studio_mod.Pipe()._generate("qwen-image-2.1-q8_0", "prompt", (1920, 1280), [])
 
     assert result == b"png-bytes"
     assert gateway == [{"path": "generations", "size": "1920x1280", "model": "qwen-image-2.1-q8_0"}]
@@ -212,4 +244,4 @@ async def test_generate_without_references_sends_a_generation(gateway):
 async def test_generate_raises_on_gateway_error(gateway):
     """A failed request raises ValueError naming the HTTP status."""
     with pytest.raises(ValueError, match="HTTP 500"):
-        await studio_mod.Pipe()._generate("fail", (1920, 1280), [])
+        await studio_mod.Pipe()._generate("qwen-image-2.1-q8_0", "fail", (1920, 1280), [])
