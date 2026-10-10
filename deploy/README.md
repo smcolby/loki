@@ -29,6 +29,7 @@ Download each file into the directory shown, under `~/.llms`.
 | `qwen3.8-27b-iq4xs` | `mmproj-Qwen3.8-27B-Q8_0.gguf` | `unsloth/Qwen3.8-27B-GGUF` publishes `mmproj-F16.gguf`; download it under this name or quantize it to Q8_0 |
 | `swift-qwen3.8-27b-iq4xs` | `Swift-1.5-Qwen3.8-27B-IQ4_XS.gguf` | `ukisai/Swift-1.5-Qwen3.8-27B-GGUF` |
 | `qwen-image-2.1` | `qwen-image-2.1-Q8_0.gguf` | `unsloth/Qwen-Image-2.1-GGUF` |
+| `qwen-image-2.1` | `qwen-image-2.1-turbo-Q8_0.gguf` | `unsloth/Qwen-Image-2.1-Turbo-GGUF` |
 | `qwen-image-2.1` | `Qwen3-VL-8B-Instruct-UD-Q4_K_XL.gguf` | `unsloth/Qwen3-VL-8B-Instruct-GGUF` |
 | `qwen-image-2.1` | `Qwen3-VL-8B-Instruct-mmproj-F16.gguf` | `unsloth/Qwen3-VL-8B-Instruct-GGUF`, saved from `mmproj-F16.gguf` |
 | `qwen-image-2.1` | `qwen_image_2.1_vae_bf16.safetensors` | `unsloth/Qwen-Image-2.1-FP8`, `vae/` |

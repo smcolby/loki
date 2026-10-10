@@ -282,5 +282,74 @@
     },
     "params": {},
     "is_active": true
+  },
+  {
+    "id": "image_studio.turbo_draft",
+    "base_model_id": null,
+    "name": "Image Studio: Turbo Draft",
+    "meta": {
+      "profile_image_url": "/static/favicon.png",
+      "description": null,
+      "capabilities": {
+        "vision": true,
+        "file_upload": true,
+        "image_generation": false,
+        "web_search": false,
+        "code_interpreter": false,
+        "citations": false,
+        "status_updates": true,
+        "builtin_tools": false,
+        "file_context": false
+      },
+      "knowledge": null
+    },
+    "params": {},
+    "is_active": true
+  },
+  {
+    "id": "image_studio.turbo_production",
+    "base_model_id": null,
+    "name": "Image Studio: Turbo Production",
+    "meta": {
+      "profile_image_url": "/static/favicon.png",
+      "description": null,
+      "capabilities": {
+        "vision": true,
+        "file_upload": true,
+        "image_generation": false,
+        "web_search": false,
+        "code_interpreter": false,
+        "citations": false,
+        "status_updates": true,
+        "builtin_tools": false,
+        "file_context": false
+      },
+      "knowledge": null
+    },
+    "params": {},
+    "is_active": true
+  },
+  {
+    "id": "image_studio.turbo_refine",
+    "base_model_id": null,
+    "name": "Image Studio: Turbo Refine",
+    "meta": {
+      "profile_image_url": "/static/favicon.png",
+      "description": null,
+      "capabilities": {
+        "vision": true,
+        "file_upload": true,
+        "image_generation": false,
+        "web_search": false,
+        "code_interpreter": false,
+        "citations": false,
+        "status_updates": true,
+        "builtin_tools": false,
+        "file_context": false
+      },
+      "knowledge": null
+    },
+    "params": {},
+    "is_active": true
   }
 ]

@@ -80,6 +80,40 @@ image:
         - "1920"
         - --height
         - "1280"
+    # Qwen Image 2.1 Turbo: the same encoders and VAE, 8 steps on the checkpoint's own
+    # sigma schedule, no CFG; EasyCache is off since each of the 8 steps is large
+    qwen-image-turbo:
+      model: qwen-image-2.1-turbo-q8_0
+      args:
+        - --diffusion-model
+        - /home/you/.llms/qwen-image-2.1/qwen-image-2.1-turbo-Q8_0.gguf
+        - --llm
+        - /home/you/.llms/qwen-image-2.1/Qwen3-VL-8B-Instruct-UD-Q4_K_XL.gguf
+        - --llm_vision
+        - /home/you/.llms/qwen-image-2.1/Qwen3-VL-8B-Instruct-mmproj-F16.gguf
+        - --vae
+        - /home/you/.llms/qwen-image-2.1/qwen_image_2.1_vae_bf16.safetensors
+        - --params-backend
+        - disk
+        - --diffusion-fa
+        - --cfg-scale
+        - "1.0"
+        - --sampling-method
+        - euler
+        - --steps
+        - "8"
+        - --sigmas
+        - "1.0,0.978453,0.95418,0.926626,0.89508,0.845148,0.704534,0.414568,0.0"
+        - --strength
+        - "1.0"
+        - --seed
+        - "-1"
+        - --ref-image-args
+        - vae_input_max_pixels=1048576
+        - --width
+        - "1920"
+        - --height
+        - "1280"
   models_dir: ~/.llms             # Mounted read-only into every image engine
 
 # Kokoro-FastAPI reads replies aloud in Open WebUI, on the CPU only

@@ -1,13 +1,17 @@
 """Open WebUI pipe function: Image Studio models that send prompts straight to Qwen Image 2.1.
 
 Paste the contents of this file into the Open WebUI function editor
-(Admin Panel → Functions → +) with the ID ``image_studio``. It adds three
-models, each sending the user's message and images unchanged to the image
-engine behind the loki gateway, with no chat model in between:
+(Admin Panel → Functions → +) with the ID ``image_studio``. It adds six
+models, each sending the user's message and images unchanged to an image
+engine behind the loki gateway, with no chat model in between. Three use
+Qwen Image 2.1 at 40 steps:
 
-- **Draft**: 1248x832 at 40 steps, a quick preview of a production image.
-- **Production**: 1920x1280 at 40 steps.
+- **Draft**: 1248x832, a quick preview of a production image.
+- **Production**: 1920x1280.
 - **Refine**: edits the most recent image in the chat at that image's size.
+
+**Turbo Draft**, **Turbo Production**, and **Turbo Refine** do the same with
+Qwen Image 2.1 Turbo at 8 steps.
 
 Draft and Production use the images attached to the current message as
 references, or none. Refine edits the most recent earlier image in the chat
@@ -33,7 +37,8 @@ from typing import Any
 import aiohttp
 
 GATEWAY_URL = "http://gateway:8080/v1"
-IMAGE_MODEL = "qwen-image-2.1-q8_0"
+BASE_MODEL = "qwen-image-2.1-q8_0"
+TURBO_MODEL = "qwen-image-2.1-turbo-q8_0"
 MAX_REFERENCES = 10
 MAX_PIXELS = 1920 * 1280
 SIZE_MULTIPLE = 32
@@ -50,6 +55,8 @@ class Studio:
     ----------
     name : str
         Model name shown in Open WebUI.
+    model : str
+        Image model id the gateway routes the request by.
     steps : int
         Sampling steps per image.
     size : tuple of int or None
@@ -59,15 +66,19 @@ class Studio:
     """
 
     name: str
+    model: str
     steps: int
     size: tuple[int, int] | None
     refine: bool = False
 
 
 STUDIOS = {
-    "draft": Studio("Image Studio: Draft", 40, (1248, 832)),
-    "production": Studio("Image Studio: Production", 40, (1920, 1280)),
-    "refine": Studio("Image Studio: Refine", 40, None, refine=True),
+    "draft": Studio("Image Studio: Draft", BASE_MODEL, 40, (1248, 832)),
+    "production": Studio("Image Studio: Production", BASE_MODEL, 40, (1920, 1280)),
+    "refine": Studio("Image Studio: Refine", BASE_MODEL, 40, None, refine=True),
+    "turbo_draft": Studio("Image Studio: Turbo Draft", TURBO_MODEL, 8, (1248, 832)),
+    "turbo_production": Studio("Image Studio: Turbo Production", TURBO_MODEL, 8, (1920, 1280)),
+    "turbo_refine": Studio("Image Studio: Turbo Refine", TURBO_MODEL, 8, None, refine=True),
 }
 
 
@@ -325,7 +336,7 @@ class Pipe:
 
         started = time.monotonic()
         try:
-            png = await self._generate(request_prompt, size, images)
+            png = await self._generate(studio.model, request_prompt, size, images)
         except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
             await self._status(__event_emitter__, "Image generation failed", done=True)
             return f"Image generation failed: {exc}"
@@ -343,16 +354,16 @@ class Pipe:
         return f"{label}, {steps} steps, seed {args['seed']}, {seconds:.0f} s"
 
     async def _generate(
-        self, prompt: str, size: tuple[int, int], images: list[tuple[bytes, str]]
+        self, model: str, prompt: str, size: tuple[int, int], images: list[tuple[bytes, str]]
     ) -> bytes:
-        """Request one image from the gateway and return its PNG bytes."""
+        """Request one image from ``model`` through the gateway and return its PNG bytes."""
         timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT_S)
         size_field = f"{size[0]}x{size[1]}"
         async with aiohttp.ClientSession(timeout=timeout) as session:
             if images:
                 form = aiohttp.FormData()
                 for key, value in (
-                    ("model", IMAGE_MODEL),
+                    ("model", model),
                     ("prompt", prompt),
                     ("size", size_field),
                     ("response_format", "b64_json"),
@@ -365,7 +376,7 @@ class Pipe:
                 request = session.post(f"{GATEWAY_URL}/images/edits", data=form)
             else:
                 payload = {
-                    "model": IMAGE_MODEL,
+                    "model": model,
                     "prompt": prompt,
                     "size": size_field,
                     "response_format": "b64_json",
