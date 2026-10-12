@@ -153,7 +153,7 @@ class StrataConfig(BaseModel):
 
     engines: dict[str, str] = {}
     data_dir: Path = Field(default=Path("~/.llms/strata"), validate_default=True)
-    ref: str = "6f32ec070f23ced9f50e704d854d775da52591ab"
+    ref: str = "a0116b2782a5b82622358c04a06496485d12b2d6"
     gpu_targets: str = "gfx1100"
     rocm_version: str = "7.10.0a20251120"
 

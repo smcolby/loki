@@ -38,7 +38,7 @@ strata:
     swift: swift.json
   # Holds the engine configs (engine args, tokenizer, model name) and the files they name.
   data_dir: ~/.llms/strata
-  ref: 6f32ec070f23ced9f50e704d854d775da52591ab  # Strata commit to build
+  ref: a0116b2782a5b82622358c04a06496485d12b2d6  # Strata commit to build
   gpu_targets: gfx1100            # AMD GPU architecture (rocminfo | grep gfx)
   rocm_version: 7.10.0a20251120   # TheRock ROCm wheels for the build and runtime
 

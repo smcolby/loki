@@ -11,7 +11,7 @@
   "--expert-cache",
   "auto",
   "--prefill",
-  "auto",
+  "auto:32768",
   "--spec",
   "4",
   "--spec-min-p",
@@ -23,13 +23,17 @@
   "--kv",
   "int8",
   "--kv-resident",
-  "32768"
+  "32768",
+  "--vram-reserve-mib",
+  "832"
  ],
  "tokenizer": "/home/you/.llms/strata/packs/swift-iq3_xxs/tokenizer",
  "model_name": "swift-qwen3.8-flash-next-iq3_xxs",
  "env": {
   "STRATA_RESIDENT_PIN": "1",
-  "STRATA_PREFILL_GROUP_GATHER": "0"
+  "STRATA_PF_FUSED": "1",
+  "STRATA_PF_GEMM": "1",
+  "STRATA_PF_SWITCH_MIN_T": "4096"
  },
  "sampling": {
   "temperature": 1.0,
