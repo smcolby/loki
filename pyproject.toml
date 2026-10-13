@@ -9,7 +9,7 @@ description = "Local Offline Knowledge Index — CLI for managing the loki serve
 requires-python = ">=3.11"
 dependencies = [
     "click",
-    "pydantic>=2.13.4",
+    "pydantic>=2.14.0",
     "requests",
     "pyyaml",
 ]
@@ -20,7 +20,7 @@ dev = [
     "pytest-mock",
     "pytest-cov",
     "pytest-aiohttp",
-    "aiohttp==3.14.3",  # matches gateway/requirements.txt
+    "aiohttp==3.14.4",  # matches gateway/requirements.txt
     "ruff",
     "pyright",
     "beautifulsoup4",  # tools/kiwix_tool.py runs inside Open WebUI, which ships it
