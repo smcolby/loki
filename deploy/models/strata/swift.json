@@ -33,7 +33,11 @@
   "STRATA_RESIDENT_PIN": "1",
   "STRATA_PF_FUSED": "1",
   "STRATA_PF_GEMM": "1",
-  "STRATA_PF_SWITCH_MIN_T": "4096"
+  "STRATA_PF_SWITCH_MIN_T": "4096",
+  "STRATA_HIP_WMMA": "1",
+  "STRATA_PA_FAST": "1",
+  "STRATA_HC_UPMIX": "1",
+  "STRATA_PF_HCDOWN": "1"
  },
  "sampling": {
   "temperature": 1.0,
