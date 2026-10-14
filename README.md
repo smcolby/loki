@@ -42,7 +42,7 @@ ports:
 
 llama:
   models_dir: ~/.llms                               # One subdirectory per model.
-  ref: 5d806aa2575e01e126651fd69ab1ab6cefff861d     # llama.cpp commit to build.
+  ref: 23deec025587a58469bdf0120313ff88a1ddcc7b     # llama.cpp commit to build.
   gpu_targets: gfx1100                              # AMD GPU architecture (rocminfo | grep gfx).
   rocm_version: 7.2.4                               # ROCm toolchain and bundled runtime.
   max_loaded: 1                                     # Models kept in VRAM at once.
