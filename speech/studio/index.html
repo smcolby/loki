@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Breeze Studio</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1c2026; --muted: #5d6673; --line: #d9dde3;
+    --accent: #1f6feb; --accent-text: #ffffff; --ok: #1a7f37; --warn: #9a6700; --bad: #cf222e;
+    --bar: #e3e7ec; --bar-fill: #9ec1f5; --bar-play: #1f6feb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151a; --panel: #1b2027; --text: #e6e9ee; --muted: #9aa4b2; --line: #2d343e;
+      --accent: #4c8dff; --accent-text: #0b0e12; --ok: #3fb950; --warn: #d29922; --bad: #f85149;
+      --bar: #2a313b; --bar-fill: #35527f; --bar-play: #4c8dff;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 16px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: 20px; margin: 0; }
+  h2 { font-size: 16px; margin: 0 0 8px; }
+  .pill { border: 1px solid var(--line); border-radius: 999px; padding: 2px 12px; font-size: 13px; color: var(--muted); }
+  nav { display: flex; gap: 4px; margin: 16px 0 12px; border-bottom: 1px solid var(--line); }
+  nav button { background: none; border: 0; padding: 8px 14px; color: var(--muted); font: inherit; cursor: pointer;
+               border-bottom: 2px solid transparent; }
+  nav button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin-bottom: 14px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+  textarea, input[type="text"], input[type="number"], select {
+    width: 100%; padding: 8px; font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 6px; }
+  textarea { min-height: 180px; resize: vertical; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .row > * { flex: 1 1 200px; }
+  button.primary, button.secondary { font: inherit; padding: 8px 16px; border-radius: 6px; cursor: pointer; border: 1px solid var(--line); }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  button.secondary { background: var(--panel); color: var(--text); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; align-items: center; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .bar { position: relative; height: 12px; background: var(--bar); border-radius: 6px; overflow: hidden; margin: 10px 0 6px; }
+  .bar .fill, .bar .play { position: absolute; top: 0; left: 0; bottom: 0; width: 0; }
+  .bar .fill { background: var(--bar-fill); }
+  .bar .play { background: var(--bar-play); }
+  .item { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; border-top: 1px solid var(--line); }
+  .item:first-child { border-top: 0; }
+  .item .meta { display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline; }
+  .item audio { width: 100%; }
+  .error { color: var(--bad); }
+  .warn { color: var(--warn); }
+  a { color: var(--accent); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Breeze Studio</h1>
+    <span class="pill" id="state">checking...</span>
+  </header>
+  <nav role="tablist">
+    <button role="tab" aria-selected="true" data-tab="generate">Generate</button>
+    <button role="tab" aria-selected="false" data-tab="voices">Voices</button>
+    <button role="tab" aria-selected="false" data-tab="library">Library</button>
+  </nav>
+
+  <section id="tab-generate">
+    <div class="panel">
+      <label for="text">Text to speak</label>
+      <textarea id="text" placeholder="Type or paste text. Long text is split at sentence ends and spoken in order."></textarea>
+      <div class="muted" id="count">0 characters</div>
+
+      <div class="row">
+        <div>
+          <label for="voice">Voice</label>
+          <select id="voice"><option value="">No saved voice (Breeze picks one each time)</option></select>
+        </div>
+        <div>
+          <label for="seed">Seed</label>
+          <input type="number" id="seed" value="42" min="0" max="2147000000">
+        </div>
+      </div>
+      <label for="instruction">Instruction (optional): describes the voice or how to speak</label>
+      <input type="text" id="instruction" maxlength="1000" placeholder="A warm, thoughtful narrator with a calm, reflective delivery.">
+      <label for="cfg">Instruction strength: <span id="cfgValue">1.0</span> (4 follows an instruction closely; needs an instruction)</label>
+      <input type="range" id="cfg" min="1" max="10" step="0.5" value="1" disabled>
+
+      <div class="actions">
+        <button class="primary" id="go">Generate</button>
+        <button class="secondary" id="stop" disabled>Stop</button>
+        <span class="muted" id="hint"></span>
+      </div>
+      <p class="muted">M4A and MP3 copies are levelled to -20 dB RMS with peaks under -3 dB (ACX audiobook limits); WAV is the untouched master. Clone only voices you have the right to use. Output is synthetic speech from Breeze TTS 2, for personal, non-commercial use.</p>
+    </div>
+
+    <div class="panel" id="player" hidden>
+      <h2 id="playerTitle">Playback</h2>
+      <div class="bar"><div class="fill" id="barFill"></div><div class="play" id="barPlay"></div></div>
+      <div id="playerState"></div>
+      <div class="muted" id="playerStats"></div>
+      <div id="result" hidden>
+        <div class="actions">
+          <a id="dlWav" download>WAV</a>
+          <a id="dlM4a" download>M4A (AAC 128 kbps, levelled)</a>
+          <a id="dlMp3" download>MP3 (128 kbps, levelled)</a>
+        </div>
+        <div class="row" id="saveVoice" hidden>
+          <div><label for="newVoiceLabel">Save the start of this audio as a voice</label>
+            <input type="text" id="newVoiceLabel" placeholder="Voice name"></div>
+          <div style="align-self:end"><button class="secondary" id="saveVoiceBtn">Save voice</button></div>
+        </div>
+        <div class="muted" id="saveVoiceMsg"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-voices" hidden>
+    <div class="panel">
+      <h2>Add a voice</h2>
+      <p class="muted">A voice is a clean 3 to 30 second recording and its exact transcript. Breeze clones from the clip each time, so the transcript must match the words spoken, including repetitions.</p>
+      <div class="row">
+        <div><label for="vLabel">Name</label><input type="text" id="vLabel" maxlength="80"></div>
+        <div><label for="vFile">Audio file</label><input type="file" id="vFile" accept="audio/*"></div>
+      </div>
+      <label for="vText">Transcript</label>
+      <textarea id="vText" style="min-height:80px"></textarea>
+      <div class="actions"><button class="primary" id="vAdd">Save voice</button><span class="muted" id="vMsg"></span></div>
+    </div>
+    <div class="panel"><h2>Saved voices</h2><div id="voiceList"></div></div>
+  </section>
+
+  <section id="tab-library" hidden>
+    <div class="panel"><h2>Saved audio</h2><div id="outputList"></div></div>
+  </section>
+</main>
+
+<script>
+// <logic>
+// Playback timing. Breeze speaks slower than real time on this GPU, so playback waits until the rest of
+// the audio will be ready by the time the audio already made has played.
+const SECONDS_PER_CHAR = 0.075;   // prior: about 110 words per minute
+const PACE_UNCERTAINTY = 1.3;     // plan for slower speech than the prior, since pace varies by about 30%
+const START_MARGIN = 1.5;         // seconds of cushion against a slow chunk
+
+function expectedTotal(chars, received, ended) {
+  if (ended) return received;
+  return Math.max(received + 1, chars * SECONDS_PER_CHAR * PACE_UNCERTAINTY);
+}
+
+function generationRate(received, elapsed) {
+  return elapsed > 0 ? received / elapsed : 0;
+}
+
+// Audio that must exist before playback starts so it never runs dry: the share of the total that
+// generation cannot finish while the start-up audio plays, plus a margin
+function audioNeeded(chars, received, elapsed) {
+  const total = expectedTotal(chars, received, false);
+  const rate = generationRate(received, elapsed);
+  if (rate >= 1) return START_MARGIN;
+  return Math.min(total, (1 - Math.max(rate, 0.05)) * total + START_MARGIN);
+}
+
+function shouldStart(chars, received, elapsed, ended) {
+  if (ended) return received > 0;
+  if (received < 1) return false;
+  return received >= audioNeeded(chars, received, elapsed);
+}
+
+// Seconds until playback starts at the current rate, or null before a rate is known
+function secondsUntilStart(chars, received, elapsed) {
+  const rate = generationRate(received, elapsed);
+  if (rate <= 0) return null;
+  return Math.max(0, audioNeeded(chars, received, elapsed) - received) / rate;
+}
+// </logic>
+
+const $ = (id) => document.getElementById(id);
+const api = (path) => `api/${path}`;
+const HEADERS = { "X-Loki-Studio": "1" };
+
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (key === "class") node.className = value;
+    else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
+    else node.setAttribute(key, value);
+  }
+  for (const child of children) node.append(child);
+  return node;
+}
+
+function formatSeconds(seconds) {
+  const s = Math.round(seconds);
+  return s >= 60 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${s} s`;
+}
+
+async function request(path, options = {}) {
+  const response = await fetch(api(path), { ...options, headers: { ...HEADERS, ...(options.headers || {}) } });
+  if (!response.ok) {
+    let message = `HTTP ${response.status}`;
+    try { message = (await response.json()).error.message; } catch (e) { /* keep the status */ }
+    throw new Error(message);
+  }
+  return response;
+}
+
+// ---- tabs and status ----
+document.querySelectorAll("nav button").forEach((button) => {
+  button.addEventListener("click", () => {
+    document.querySelectorAll("nav button").forEach((b) => b.setAttribute("aria-selected", String(b === button)));
+    for (const name of ["generate", "voices", "library"]) $(`tab-${name}`).hidden = name !== button.dataset.tab;
+    if (button.dataset.tab === "voices") refreshVoices();
+    if (button.dataset.tab === "library") refreshOutputs();
+  });
+});
+
+async function pollStatus() {
+  try {
+    const status = await (await request("status")).json();
+    const labels = { stopped: "Breeze is not loaded", starting: "Breeze is loading", ready: "Breeze is ready" };
+    let text = labels[status.state] || status.state;
+    if (status.generating && status.progress.chunks) text += `, speaking part ${status.progress.chunk} of ${status.progress.chunks}`;
+    $("state").textContent = text;
+  } catch (e) {
+    $("state").textContent = "Studio unreachable";
+  }
+}
+setInterval(pollStatus, 2000);
+pollStatus();
+
+// ---- voices ----
+let voices = [];
+
+async function refreshVoices() {
+  voices = (await (await request("voices")).json()).voices;
+  const select = $("voice");
+  const chosen = select.value;
+  select.replaceChildren(el("option", { value: "" }, "No saved voice (Breeze picks one each time)"));
+  for (const voice of voices) select.append(el("option", { value: voice.id }, voice.label));
+  select.value = voices.some((v) => v.id === chosen) ? chosen : "";
+
+  const list = $("voiceList");
+  list.replaceChildren();
+  if (!voices.length) list.append(el("div", { class: "muted" }, "No saved voices yet."));
+  for (const voice of voices) {
+    list.append(el("div", { class: "item" },
+      el("div", { class: "meta" }, el("strong", {}, voice.label),
+         el("span", { class: "muted" }, `${voice.duration_s} s clip, ${voice.source}`),
+         el("button", { class: "secondary", onclick: async () => {
+           if (confirm(`Delete the voice "${voice.label}"?`)) { await request(`voices/${voice.id}`, { method: "DELETE" }); refreshVoices(); }
+         } }, "Delete")),
+      el("div", { class: "muted" }, voice.ref_text),
+      el("audio", { controls: "", preload: "none", src: api(`voices/${voice.id}/audio`) })));
+  }
+}
+
+// Decode any audio file the browser can play, and return a mono 24 kHz 16-bit WAV
+async function toReferenceWav(file) {
+  const context = new AudioContext();
+  const decoded = await context.decodeAudioData(await file.arrayBuffer());
+  await context.close();
+  if (decoded.duration < 3 || decoded.duration > 30) {
+    throw new Error(`the clip is ${decoded.duration.toFixed(1)} s; use 3 to 30 s`);
+  }
+  const frames = Math.round(decoded.duration * 24000);
+  const offline = new OfflineAudioContext(1, frames, 24000);
+  const source = offline.createBufferSource();
+  source.buffer = decoded;
+  source.connect(offline.destination);
+  source.start();
+  const samples = (await offline.startRendering()).getChannelData(0);
+  const wav = new DataView(new ArrayBuffer(44 + frames * 2));
+  const text = (offset, value) => [...value].forEach((c, i) => wav.setUint8(offset + i, c.charCodeAt(0)));
+  text(0, "RIFF"); wav.setUint32(4, 36 + frames * 2, true); text(8, "WAVEfmt ");
+  wav.setUint32(16, 16, true); wav.setUint16(20, 1, true); wav.setUint16(22, 1, true);
+  wav.setUint32(24, 24000, true); wav.setUint32(28, 48000, true); wav.setUint16(32, 2, true);
+  wav.setUint16(34, 16, true); text(36, "data"); wav.setUint32(40, frames * 2, true);
+  for (let i = 0; i < frames; i++) wav.setInt16(44 + i * 2, Math.max(-1, Math.min(1, samples[i])) * 32767, true);
+  return new Blob([wav], { type: "audio/wav" });
+}
+
+$("vAdd").addEventListener("click", async () => {
+  const file = $("vFile").files[0];
+  const message = $("vMsg");
+  message.className = "muted";
+  if (!$("vLabel").value.trim() || !$("vText").value.trim() || !file) {
+    message.textContent = "Give the voice a name, a transcript, and an audio file.";
+    return;
+  }
+  try {
+    message.textContent = "Converting and saving...";
+    const form = new FormData();
+    form.append("label", $("vLabel").value.trim());
+    form.append("ref_text", $("vText").value.trim());
+    form.append("ref_audio", await toReferenceWav(file), "ref.wav");
+    await request("voices", { method: "POST", body: form });
+    message.textContent = "Saved.";
+    $("vLabel").value = ""; $("vText").value = ""; $("vFile").value = "";
+    refreshVoices();
+  } catch (error) {
+    message.className = "error";
+    message.textContent = error.message;
+  }
+});
+
+// ---- library ----
+async function refreshOutputs() {
+  const outputs = (await (await request("outputs")).json()).outputs;
+  const list = $("outputList");
+  list.replaceChildren();
+  if (!outputs.length) list.append(el("div", { class: "muted" }, "Nothing saved yet."));
+  for (const out of outputs) {
+    const link = (format, label) => el("a", { href: api(`outputs/${out.id}/audio?format=${format}`), download: "" }, label);
+    list.append(el("div", { class: "item" },
+      el("div", { class: "meta" }, el("strong", {}, out.title),
+         el("span", { class: "muted" }, `${formatSeconds(out.duration_s)}, ${new Date(out.created * 1000).toLocaleString()}`
+           + (out.voice_label ? `, voice ${out.voice_label}` : "") + (out.rtf ? `, made at ${(1 / out.rtf).toFixed(2)}x real time` : ""))),
+      ...(out.warnings.length ? [el("div", { class: "warn" }, out.warnings.join("; "))] : []),
+      el("audio", { controls: "", preload: "none", src: api(`outputs/${out.id}/audio?format=wav`) }),
+      el("div", { class: "actions" }, link("wav", "WAV"), link("m4a", "M4A (AAC 128 kbps, levelled)"), link("mp3", "MP3 (128 kbps, levelled)"),
+         el("button", { class: "secondary", onclick: async () => {
+           if (confirm(`Delete "${out.title}"?`)) { await request(`outputs/${out.id}`, { method: "DELETE" }); refreshOutputs(); }
+         } }, "Delete"))));
+  }
+}
+
+// ---- generation and buffered playback ----
+const textBox = $("text"), instruction = $("instruction"), cfg = $("cfg");
+let session = null;
+
+function updateControls() {
+  const chars = textBox.value.length;
+  $("count").textContent = `${chars.toLocaleString()} characters, about ${formatSeconds(chars * SECONDS_PER_CHAR)} of speech`;
+  const has = instruction.value.trim().length > 0;
+  cfg.disabled = !has;
+  if (!has) cfg.value = "1";
+  $("cfgValue").textContent = Number(cfg.value).toFixed(1);
+}
+[textBox, instruction, cfg].forEach((node) => node.addEventListener("input", updateControls));
+updateControls();
+
+function setPlayer(title, state, stats) {
+  $("playerTitle").textContent = title;
+  $("playerState").textContent = state;
+  $("playerStats").textContent = stats || "";
+}
+
+// Stop the request, the scheduled audio, and the progress timer of the running session
+function stopSession() {
+  if (!session) return;
+  session.controller.abort();
+  session.sources.forEach((s) => { try { s.stop(); } catch (e) { /* already stopped */ } });
+  session.context.close().catch(() => {});
+  clearInterval(session.timer);
+  session = null;
+  $("go").disabled = false; $("stop").disabled = true;
+}
+
+async function generate() {
+  const text = textBox.value.trim();
+  if (!text) { $("hint").textContent = "Enter some text first."; return; }
+  stopSession();
+  $("hint").textContent = "";
+  $("go").disabled = true; $("stop").disabled = false;
+  $("player").hidden = false; $("result").hidden = true; $("saveVoiceMsg").textContent = "";
+  $("playerState").className = "";
+  $("barFill").style.width = "0"; $("barPlay").style.width = "0";
+
+  const context = new AudioContext();
+  const controller = new AbortController();
+  const mine = { controller, context, sources: [], timer: 0 };
+  session = mine;
+  const form = new FormData();
+  form.append("text", text);
+  form.append("seed", $("seed").value || "42");
+  form.append("voice_id", $("voice").value);
+  if (instruction.value.trim()) {
+    form.append("instruction", instruction.value.trim());
+    form.append("cfg_scale", cfg.value);
+  }
+
+  setPlayer("Starting", "Waiting for Breeze. If another model is loaded it is unloaded first; loading takes about 45 to 95 s.", "");
+  let received = 0, firstByte = 0, playing = false, startedAt = 0, nextTime = 0, ended = false, outputId = "";
+  const queue = [];
+  const chars = text.length;
+
+  const schedule = (samples) => {
+    const buffer = context.createBuffer(1, samples.length, 24000);
+    buffer.copyToChannel(samples, 0);
+    const source = context.createBufferSource();
+    source.buffer = buffer;
+    source.connect(context.destination);
+    nextTime = Math.max(nextTime, context.currentTime + 0.05);
+    source.start(nextTime);
+    nextTime += buffer.duration;
+    mine.sources.push(source);
+  };
+
+  const refresh = () => {
+    const elapsed = firstByte ? (performance.now() - firstByte) / 1000 : 0;
+    const total = expectedTotal(chars, received, ended);
+    $("barFill").style.width = `${Math.min(100, (received / total) * 100)}%`;
+    if (!playing && queue.length && shouldStart(chars, received, elapsed, ended)) {
+      playing = true; startedAt = context.currentTime + 0.05;
+      while (queue.length) schedule(queue.shift());
+    }
+    const rate = generationRate(received, elapsed);
+    const stats = firstByte ? `Made ${formatSeconds(received)} of about ${formatSeconds(total)} at ${rate.toFixed(2)}x real time.` : "";
+    if (playing) {
+      const position = Math.max(0, context.currentTime - startedAt);
+      $("barPlay").style.width = `${Math.min(100, (position / total) * 100)}%`;
+      const finished = ended && context.currentTime >= nextTime;
+      setPlayer(finished ? "Finished" : "Playing", finished ? "Finished." : (ended ? "Playing." : "Playing while the rest is made."), stats);
+      if (finished && session === mine) stopSession();
+    } else if (firstByte) {
+      const wait = secondsUntilStart(chars, received, elapsed);
+      setPlayer("Buffering", wait === null ? "Buffering..." : `Playback starts in about ${formatSeconds(wait)}, once enough is made to play without a gap.`, stats);
+    }
+  };
+  mine.timer = setInterval(refresh, 250);
+
+  try {
+    const response = await request("generate", { method: "POST", body: form, signal: controller.signal });
+    outputId = response.headers.get("X-Output-Id") || "";
+    const reader = response.body.getReader();
+    let carry = new Uint8Array(0);
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!firstByte) firstByte = performance.now();
+      const bytes = new Uint8Array(carry.length + value.length);
+      bytes.set(carry); bytes.set(value, carry.length);
+      const usable = bytes.length - (bytes.length % 2);
+      carry = bytes.slice(usable);
+      const ints = new Int16Array(bytes.buffer.slice(0, usable));
+      const samples = new Float32Array(ints.length);
+      for (let i = 0; i < ints.length; i++) samples[i] = ints[i] / 32768;
+      received += samples.length / 24000;
+      if (playing) schedule(samples); else queue.push(samples);
+      refresh();
+    }
+    ended = true; refresh();
+    if (!received) throw new Error("Breeze returned no audio.");
+    if (session === mine) $("go").disabled = false;
+    $("result").hidden = false;
+    for (const [id, format] of [["dlWav", "wav"], ["dlM4a", "m4a"], ["dlMp3", "mp3"]]) {
+      $(id).href = api(`outputs/${outputId}/audio?format=${format}`);
+    }
+    $("saveVoice").hidden = false;
+    $("saveVoiceBtn").onclick = async () => {
+      const label = $("newVoiceLabel").value.trim();
+      if (!label) { $("saveVoiceMsg").textContent = "Give the voice a name."; return; }
+      try {
+        await request("voices/from-output", { method: "POST", headers: { "Content-Type": "application/json" },
+                                              body: JSON.stringify({ output_id: outputId, label }) });
+        $("saveVoiceMsg").textContent = "Saved. Choose it under Voice.";
+        refreshVoices();
+      } catch (error) { $("saveVoiceMsg").textContent = error.message; }
+    };
+  } catch (error) {
+    if (session === mine) stopSession();
+    const stopped = error.name === "AbortError";
+    setPlayer(stopped ? "Stopped" : "Failed", stopped ? "Stopped. Nothing was saved." : `${error.message}. Nothing was saved.`, "");
+    $("playerState").className = stopped ? "" : "error";
+  }
+}
+
+$("go").addEventListener("click", generate);
+$("stop").addEventListener("click", stopSession);
+refreshVoices();
+</script>
+</body>
+</html>
