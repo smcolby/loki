@@ -631,13 +631,13 @@ def _write_master(path: Path, amplitude: float, spike: float = 0.0) -> None:
 
 @pytest.mark.parametrize(
     ("amplitude", "spike", "gain"),
-    [(0.03, 0.0, 13.5), (0.3, 0.0, -6.5), (0.05, 0.5, 3.0)],
+    [(0.03, 0.0, 13.5), (0.3, 0.0, -6.5), (0.05, 0.5, 2.5)],
     ids=["quiet master is raised", "hot master is lowered", "tall peak limits the gain"],
 )
 def test_export_gain_reaches_the_target_without_passing_the_peak_ceiling(
     tmp_path, amplitude, spike, gain
 ):
-    """RMS goes to -20 dB, unless that would put a peak above -3 dB."""
+    """RMS goes to -20 dB, unless that would put a peak above -3.5 dB."""
     _write_master(tmp_path / "master.wav", amplitude, spike)
 
     assert sup.export_gain_db(tmp_path / "master.wav") == pytest.approx(gain, abs=0.2)

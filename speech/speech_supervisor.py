@@ -46,9 +46,10 @@ OWNED_FLAGS = ("--host", "--port")
 MODEL_ID = "breeze-tts-2"
 SAMPLE_RATE = 24000
 FRAME_BYTES = 1920 * 2
-# Export levels from ACX's audiobook requirements: RMS between -23 and -18 dB, peaks under -3 dB
+# Export levels from ACX's audiobook requirements: RMS between -23 and -18 dB, peaks under -3 dB.
+# The ceiling is 0.5 dB lower than the limit because AAC and MP3 encoding can overshoot a peak.
 TARGET_RMS_DB = -20.0
-PEAK_CEILING_DB = -3.0
+PEAK_CEILING_DB = -3.5
 CAP_FRAMES = 1499
 MAX_TEXT_CHARS = 60_000
 CHUNK_CHARS = 500
