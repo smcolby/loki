@@ -13,7 +13,7 @@ The configuration of a working loki stack on one RX 7900 XTX (24 GB) with 32 GB 
 | `open-webui/config.json` | Open WebUI, **Admin Panel > Settings > Database > Import Config** |
 | `open-webui/models.json` | Open WebUI, **Workspace > Models > Import** |
 
-`open-webui/config.json` holds only the image generation, image editing, read-aloud (Kokoro), and context compaction settings, turns web search on by default in every chat whose model allows it, and turns off Arena models, so importing it leaves every other setting alone. `open-webui/models.json` holds each model's parameters (reasoning effort, compaction threshold, native function calling), its Kiwix tool, and the Image Studio models' vision setting.
+`open-webui/config.json` holds only the image generation, image editing, read-aloud (Kokoro), and context compaction settings, turns web search on by default in every chat whose model allows it, and turns off Arena models, so importing it leaves every other setting alone. `open-webui/models.json` holds each model's parameters (reasoning effort, compaction threshold, native function calling), its Kiwix tool, the Image Studio models' vision setting, and which built-in tools each model is offered. Only the time, web search, URL fetch, and chat history tools stay on (image generation and code execution also join a chat when you turn them on in it); memory, notes, knowledge bases, channels, calendar, automations, tasks, and asking the user are off, since each tool's definition is resent in every request.
 
 ## Model files
 

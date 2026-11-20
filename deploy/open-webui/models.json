@@ -22,14 +22,18 @@
       "tags": [],
       "builtinTools": {
         "time": true,
-        "memory": true,
+        "memory": false,
         "chats": true,
-        "notes": true,
-        "knowledge": true,
-        "channels": true,
+        "notes": false,
+        "knowledge": false,
+        "channels": false,
         "web_search": true,
         "image_generation": true,
-        "code_interpreter": true
+        "code_interpreter": true,
+        "calendar": false,
+        "automations": false,
+        "tasks": false,
+        "user_input": false
       },
       "toolIds": [
         "local_kiwix_search"
@@ -65,14 +69,18 @@
       "tags": [],
       "builtinTools": {
         "time": true,
-        "memory": true,
+        "memory": false,
         "chats": true,
-        "notes": true,
-        "knowledge": true,
-        "channels": true,
+        "notes": false,
+        "knowledge": false,
+        "channels": false,
         "web_search": true,
         "image_generation": true,
-        "code_interpreter": true
+        "code_interpreter": true,
+        "calendar": false,
+        "automations": false,
+        "tasks": false,
+        "user_input": false
       },
       "toolIds": [
         "local_kiwix_search"
@@ -108,14 +116,18 @@
       "tags": [],
       "builtinTools": {
         "time": true,
-        "memory": true,
+        "memory": false,
         "chats": true,
-        "notes": true,
-        "knowledge": true,
-        "channels": true,
+        "notes": false,
+        "knowledge": false,
+        "channels": false,
         "web_search": true,
         "image_generation": true,
-        "code_interpreter": true
+        "code_interpreter": true,
+        "calendar": false,
+        "automations": false,
+        "tasks": false,
+        "user_input": false
       },
       "toolIds": [
         "local_kiwix_search"
@@ -151,14 +163,18 @@
       "tags": [],
       "builtinTools": {
         "time": true,
-        "memory": true,
+        "memory": false,
         "chats": true,
-        "notes": true,
-        "knowledge": true,
-        "channels": true,
+        "notes": false,
+        "knowledge": false,
+        "channels": false,
         "web_search": true,
         "image_generation": true,
-        "code_interpreter": true
+        "code_interpreter": true,
+        "calendar": false,
+        "automations": false,
+        "tasks": false,
+        "user_input": false
       },
       "toolIds": [
         "local_kiwix_search"
@@ -194,14 +210,18 @@
       "tags": [],
       "builtinTools": {
         "time": true,
-        "memory": true,
+        "memory": false,
         "chats": true,
-        "notes": true,
-        "knowledge": true,
-        "channels": true,
+        "notes": false,
+        "knowledge": false,
+        "channels": false,
         "web_search": true,
         "image_generation": true,
-        "code_interpreter": true
+        "code_interpreter": true,
+        "calendar": false,
+        "automations": false,
+        "tasks": false,
+        "user_input": false
       },
       "toolIds": [
         "local_kiwix_search"
