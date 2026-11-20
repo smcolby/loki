@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from loki.cli import cli
+from loki.cli import _images, cli
 from loki.config import gateway_tag
 
 LLAMA = "loki-llama:gfx1100-rocm7.2.4-abc123"
@@ -157,3 +157,15 @@ def test_cleanup_exits_when_docker_not_found(mocker):
 
     assert result.exit_code != 0
     assert "docker" in result.output
+
+
+def test_cleanup_covers_the_speech_image_repository(mocker, sample_config):
+    """An old speech image is listed, and the configured one is kept."""
+    sample_config.speech.enabled = True
+    current = _images(sample_config)["speech"].split(":")[1]
+    _docker(mocker, {"loki-speech": [current, "rocm7.2.4-torch2.9.1-abc-oldhash"]})
+
+    result = CliRunner().invoke(cli, ["cleanup"], input="n\n")
+
+    assert "loki-speech:rocm7.2.4-torch2.9.1-abc-oldhash" in result.output
+    assert f"loki-speech:{current}\n" not in result.output

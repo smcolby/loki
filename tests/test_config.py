@@ -14,12 +14,14 @@ from loki.config import (
     LlamaConfig,
     LokiConfig,
     PortsConfig,
+    SpeechConfig,
     StrataConfig,
     TtsConfig,
     build_caddyfile,
     build_engines_compose,
     build_env_file,
     caddyfile_path,
+    device_groups,
     engines_compose_path,
     env_file_path,
     gateway_tag,
@@ -27,6 +29,7 @@ from loki.config import (
     kiwix_dir,
     load_config,
     models_preset_path,
+    speech_tag,
 )
 
 
@@ -173,6 +176,14 @@ def test_build_caddyfile_sends_the_strata_dashboard_to_the_gateway():
     assert result.index("gateway:8080") < result.index("open-webui:8080")
 
 
+def test_build_caddyfile_sends_the_breeze_studio_to_the_gateway():
+    """Paths under /breeze go to the gateway, ahead of the Open WebUI catch-all."""
+    result = build_caddyfile("loki.local")
+
+    assert "\thandle /breeze* {\n\t\treverse_proxy gateway:8080" in result
+    assert result.index("handle /breeze*") < result.index("open-webui:8080")
+
+
 def test_build_caddyfile_uses_custom_url():
     """build_caddyfile uses the provided URL, not the default."""
     result = build_caddyfile("myserver.local")
@@ -250,6 +261,7 @@ IMAGES = {
     "llama": "loki-llama:x",
     "strata": "loki-strata:y",
     "image": "loki-image:w",
+    "speech": "loki-speech:v",
     "gateway": "loki-gateway:z",
 }
 QWEN_IMAGE = ImageEngineConfig(
@@ -460,12 +472,14 @@ def test_image_names_carry_every_build_input():
         llama=LlamaConfig(ref="aaa", gpu_targets="gfx1201", rocm_version="7.2.4"),
         strata=StrataConfig(ref="bbb", gpu_targets="gfx1100", rocm_version="7.10.0a1"),
         image=ImageConfig(ref="ccc", gpu_targets="gfx1030", rocm_version="7.2.3"),
+        speech=SpeechConfig(ref="ddddddddddddeeee", rocm_version="7.2.4", torch_version="2.9.1"),
     )
 
-    assert image_names(config, "0123abcd") == {
+    assert image_names(config, "0123abcd", "feed12345678") == {
         "llama": "loki-llama:gfx1201-rocm7.2.4-aaa",
         "strata": "loki-strata:gfx1100-rocm7.10.0a1-bbb",
         "image": "loki-image:gfx1030-rocm7.2.3-ccc",
+        "speech": "loki-speech:rocm7.2.4-torch2.9.1-dddddddddddd-feed12345678",
         "gateway": "loki-gateway:0123abcd",
     }
 
@@ -485,6 +499,89 @@ def test_gateway_tag_fails_on_missing_source(tmp_path):
     """A gateway directory without its sources raises instead of naming an arbitrary image."""
     with pytest.raises(FileNotFoundError):
         gateway_tag(tmp_path)
+
+
+def test_speech_tag_tracks_every_build_input(speech_sources):
+    """The speech tag changes when the Dockerfile, supervisor, or Studio page changes."""
+    first = speech_tag(speech_sources)
+    assert speech_tag(speech_sources) == first
+    assert len(first) == 12
+
+    for name in ("Dockerfile", "speech_supervisor.py", "studio/index.html"):
+        path = speech_sources / name
+        original = path.read_text()
+        path.write_text("changed\n")
+        assert speech_tag(speech_sources) != first, name
+        path.write_text(original)
+
+
+def test_speech_tag_fails_on_missing_source(tmp_path):
+    """A speech directory without its sources raises instead of naming an arbitrary image."""
+    with pytest.raises(FileNotFoundError):
+        speech_tag(tmp_path)
+
+
+def test_speech_engine_is_off_by_default_and_listed_once_enabled():
+    """The speech service joins the engines the gateway lists only when enabled."""
+    assert LokiConfig().speech.services() == []
+    assert "speech-breeze" not in LokiConfig().engine_services()
+
+    enabled = LokiConfig(speech=SpeechConfig(enabled=True))
+
+    assert enabled.speech.services() == ["speech-breeze"]
+    assert enabled.engine_services()[-1] == "speech-breeze"
+
+
+def test_speech_data_dir_expands_home(monkeypatch, tmp_path):
+    """The default Breeze data_dir is absolute and lives under ~/.llms."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    assert SpeechConfig().data_dir == tmp_path / ".llms" / "breeze"
+
+
+def test_build_engines_compose_runs_the_speech_engine_as_the_host_user(tmp_path, mocker):
+    """The speech container mounts the checkpoint read-only and runs with the GPU's groups."""
+    mocker.patch("loki.config.device_groups", return_value=["44", "992"])
+    mocker.patch("loki.config.os.getuid", return_value=1000)
+    mocker.patch("loki.config.os.getgid", return_value=1001)
+    speech = SpeechConfig(enabled=True, data_dir=tmp_path / "breeze", ref="beef")
+
+    text = build_engines_compose(LokiConfig(speech=speech), IMAGES, tmp_path / "root")
+    services = yaml.safe_load(text)["services"]
+
+    assert list(services) == ["speech-breeze"]
+    breeze = services["speech-breeze"]
+    assert breeze["image"] == "loki-speech:v"
+    assert breeze["container_name"] == "loki-speech-breeze"
+    assert breeze["user"] == "1000:1001"
+    assert breeze["group_add"] == ["44", "992"]
+    assert breeze["build"] == {
+        "context": str(tmp_path / "root" / "speech"),
+        "args": {"ROCM_VERSION": "7.2.4", "TORCH_VERSION": "2.9.1", "BREEZE_REF": "beef"},
+    }
+    assert breeze["volumes"] == [
+        f"{tmp_path}/breeze/model:/model:ro",
+        f"{tmp_path}/breeze/library:/data",
+        f"{tmp_path}/breeze/cache:/cache",
+    ]
+    assert breeze["command"] == ["--fast-depth-decoder"]
+    assert "TORCHINDUCTOR_CACHE_DIR=/cache/inductor" in breeze["environment"]
+    assert "HF_HUB_OFFLINE=1" in breeze["environment"]
+
+
+def test_build_engines_compose_omits_the_speech_engine_when_disabled(tmp_path):
+    """A disabled speech section adds no service."""
+    text = build_engines_compose(LokiConfig(speech=SpeechConfig()), IMAGES, tmp_path)
+
+    assert "speech-breeze" not in yaml.safe_load(text)["services"]
+
+
+def test_device_groups_lists_numeric_ids():
+    """Group ids come back as sorted decimal strings, empty when no GPU node exists."""
+    groups = device_groups()
+
+    assert all(group.isdigit() for group in groups)
+    assert groups == sorted(set(groups), key=int)
 
 
 def test_strata_data_dir_expands_home(monkeypatch, tmp_path):
