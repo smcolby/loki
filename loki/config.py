@@ -105,7 +105,7 @@ class LlamaConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     models_dir: Path = Field(default=Path("~/.llms"), validate_default=True)
-    ref: str = "5d806aa2575e01e126651fd69ab1ab6cefff861d"
+    ref: str = "23deec025587a58469bdf0120313ff88a1ddcc7b"
     gpu_targets: str = "gfx1100"
     rocm_version: str = "7.2.4"
     max_loaded: int = 1
