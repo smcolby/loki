@@ -264,6 +264,32 @@ tts:
 
 `loki start` then runs it as Compose service `kokoro` (container `loki-kokoro`), reachable only inside the stack. To use it, open **Admin Panel > Settings > Audio**, set the text-to-speech engine to OpenAI, the base URL to `http://kokoro:8880/v1`, any API key, the model to `kokoro`, and the voice to a Kokoro voice name. Kokoro lists its voices at `/v1/audio/voices`. The first letter of a name is its accent (`a` American, `b` British), and the second is `f` or `m`. Set **Response splitting** to **Paragraphs** so headings and list items are read as separate clips with a short gap between them; the default **Punctuation** joins any piece under 50 characters to the next, so a heading runs straight into its first sentence. Each user can pick a different voice under **Settings > Audio**. To change the speaking rate for everyone, set the text-to-speech **Parameters** field in the same admin page to `{"speed": 1.2}` (Kokoro accepts 0.25 to 4.0). Open WebUI caches each spoken sentence without the rate in its key, so clear `data/open-webui/cache/audio/speech` afterward to avoid replaying sentences at the old rate. On a 16-core CPU, Kokoro speaks about five times faster than real time and uses about 1.2 GiB of RAM.
 
+## Cloning voices with Breeze
+
+[Breeze TTS 2](https://huggingface.co/BreezeBlue/Breeze-TTS-2) is a 3B-parameter speech model. It clones a voice from a short recording, invents one from a description, and follows instructions such as "speak slowly with a restrained tone". It speaks English and Chinese. Its weights and everything it generates are licensed for research and non-commercial use only (its code is Apache-2.0), so use it for personal projects.
+
+Download the checkpoint (about 7.7 GB, every file in the Hugging Face repository except `assets/`) into `~/.llms/breeze/model`, then enable the engine in `config.yaml`:
+
+```yaml
+speech:
+  enabled: true
+  data_dir: ~/.llms/breeze   # model/ (the checkpoint), library/ (voices and audio), cache/
+```
+
+`loki start` builds the `speech-breeze` image (about 30 GB, mostly the ROCm PyTorch base) and serves the Studio at `http://loki.local/breeze/`.
+
+Breeze shares the GPU like every other engine. Generating speech unloads the loaded model and starts Breeze, which needs about 45 s once its compile cache is warm and about 95 s the first time. The next chat or API request unloads Breeze and loads that model again. The Studio page, the voice library, and saved audio stay available while another model is loaded, and Breeze uses about 10 GiB of VRAM while it runs.
+
+On an RX 7900 XTX, Breeze speaks at about 0.75x real time (one second of speech needs about 1.3 s, with `--fast-depth-decoder`, which roughly doubles the speed of plain eager mode; Breeze's other fast stages add no speed here and need about 10 GiB more VRAM). The Studio therefore starts playback only when the rest of the audio will be ready by the time the first part finishes playing, and shows a progress bar and a countdown. Text of any length (up to 60,000 characters) is split at sentence ends into chunks of at most 500 characters, spoken in order with short pauses, and saved as one file.
+
+In the Studio:
+
+- **Generate** accepts text, an optional saved voice, an optional instruction, its strength (1 to 10; a value above 1 needs an instruction), and a seed. Without a saved voice, Breeze invents a different voice for each chunk, so choose or save a voice before narrating long text.
+- **Voices** saves a voice from a clean recording of 3 to 30 seconds and its exact transcript, including repeated words. Any audio file the browser can play works; the page converts it to 24 kHz mono before uploading. After generating a short sample (about two sentences) from an instruction, **Save voice** stores the sample as a voice, which makes the designed voice identical across later requests.
+- **Library** lists saved audio with its settings, and downloads it as WAV (the master), M4A (AAC at 128 kbps), or MP3 (128 kbps). The M4A and MP3 copies are levelled to -20 dB RMS with peaks under -3 dB, the limits ACX publishes for audiobooks, at 44.1 kHz with title tags.
+
+Breeze serves one request at a time. The Studio has no sign-in, like the rest of the LAN-facing stack, and refuses changes without the Studio's request header, which a page on another site cannot add. Clone only voices you have the right to use.
+
 ---
 
 ## Advanced
