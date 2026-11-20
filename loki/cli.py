@@ -9,6 +9,7 @@ import click
 import requests
 
 from loki.config import (
+    SPEECH_SERVICE,
     LokiConfig,
     avahi_pid_file,
     build_caddyfile,
@@ -24,6 +25,8 @@ from loki.config import (
     load_config,
     loki_root,
     models_preset_path,
+    speech_dir,
+    speech_tag,
 )
 from loki.presets import PresetError, build_models_preset
 from loki.system import (
@@ -42,7 +45,7 @@ from loki.system import (
     upgrade_packages,
 )
 
-BUILT_SERVICES = ("gateway", "llama", "strata", "image")
+BUILT_SERVICES = ("gateway", "llama", "strata", "image", "speech")
 
 
 def _require_tool(name: str) -> None:
@@ -82,19 +85,21 @@ def _compose(*args: str) -> list[str]:
 
 def _images(config: LokiConfig) -> dict[str, str]:
     """Return the image each locally built service runs, keyed by service name."""
-    return image_names(config, gateway_tag(gateway_dir()))
+    return image_names(config, gateway_tag(gateway_dir()), speech_tag(speech_dir()))
 
 
 def _build_targets(config: LokiConfig) -> dict[str, str]:
     """Return the Compose service that builds each locally built image the stack needs.
 
     Every Strata engine runs one image and every image engine another, so the
-    first engine's service of each kind builds it.
+    first engine's service of each kind builds it. The speech engine is one service.
     """
     targets = {"gateway": "gateway", "llama": "llama"}
     for key, services in (("strata", config.strata.services()), ("image", config.image.services())):
         if services:
             targets[key] = next(iter(services))
+    if config.speech.enabled:
+        targets["speech"] = SPEECH_SERVICE
     return targets
 
 
@@ -141,8 +146,8 @@ def _write_generated_files(config: LokiConfig) -> bool:
     -------
     bool
         ``True`` when every file was written, ``False`` when a Strata engine's
-        config is missing or a model preset is invalid (the error is printed
-        and ``models.ini`` is left untouched).
+        config or the Breeze checkpoint is missing or a model preset is invalid
+        (the error is printed and ``models.ini`` is left untouched).
     """
     # Require each Strata engine config, which Compose would otherwise fail to mount
     missing = [str(path) for path in config.strata.services().values() if not path.is_file()]
@@ -153,6 +158,20 @@ def _write_generated_files(config: LokiConfig) -> bool:
             err=True,
         )
         return False
+
+    # Require the Breeze checkpoint, and create the library and cache directories as this user
+    # so Compose does not create them owned by root
+    speech = config.speech
+    if speech.enabled:
+        if not (speech.data_dir / "model" / "config.json").is_file():
+            click.echo(
+                f"Error: Breeze checkpoint not found in {speech.data_dir / 'model'} "
+                "(see deploy/README.md for the files to download).",
+                err=True,
+            )
+            return False
+        for name in ("library", "cache"):
+            (speech.data_dir / name).mkdir(parents=True, exist_ok=True)
 
     images = _images(config)
     caddyfile_path().write_text(build_caddyfile(config.url))

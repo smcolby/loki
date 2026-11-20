@@ -6,8 +6,8 @@ replaces ``loki.cli._missing_services`` with a stub.
 
 import subprocess
 
-from loki.cli import _build_services, _missing_services
-from loki.config import ImageConfig, ImageEngineConfig, gateway_tag
+from loki.cli import _build_services, _images, _missing_services
+from loki.config import ImageConfig, ImageEngineConfig, SpeechConfig, gateway_tag
 
 LLAMA = "loki-llama:gfx1100-rocm7.2.4-abc123"
 STRATA = "loki-strata:gfx1100-rocm7.10.0a20251120-c6f6427d9de9016fd92d13e29740f65625261df7"
@@ -107,3 +107,42 @@ def test_build_services_reports_failure(mocker, sample_config):
     )
 
     assert _build_services(sample_config, ["llama"]) is False
+
+
+def test_missing_services_includes_the_speech_image_only_when_enabled(mocker, sample_config):
+    """The speech image is checked once, and only when the speech engine is enabled."""
+    _inspect(mocker, set())
+
+    assert _missing_services(sample_config) == ["gateway", "llama"]
+
+    sample_config.speech = SpeechConfig(enabled=True)
+    assert _missing_services(sample_config) == ["gateway", "llama", "speech"]
+
+
+def test_missing_services_follows_the_speech_sources(mocker, sample_config, speech_sources):
+    """Editing the speech supervisor names a new speech image, which is then missing."""
+    sample_config.speech = SpeechConfig(enabled=True)
+    present = {
+        LLAMA,
+        _images(sample_config)["gateway"],
+        _images(sample_config)["speech"],
+    }
+    _inspect(mocker, present)
+    assert _missing_services(sample_config) == []
+
+    (speech_sources / "speech_supervisor.py").write_text("changed\n")
+
+    assert _missing_services(sample_config) == ["speech"]
+
+
+def test_build_services_builds_the_speech_engine_through_its_service(mocker, sample_config):
+    """The speech image is built by Compose through the speech-breeze service."""
+    sample_config.speech = SpeechConfig(enabled=True)
+    mock_run = mocker.patch(
+        "loki.cli.subprocess.run",
+        autospec=True,
+        return_value=subprocess.CompletedProcess(args=[], returncode=0),
+    )
+
+    assert _build_services(sample_config, ["speech"]) is True
+    assert mock_run.call_args.args[0][-2:] == ["build", "speech-breeze"]
