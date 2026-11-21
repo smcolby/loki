@@ -34,6 +34,7 @@ Download each file into the directory shown, under `~/.llms`.
 | `qwen-image-2.1` | `Qwen3-VL-8B-Instruct-mmproj-F16.gguf` | `unsloth/Qwen3-VL-8B-Instruct-GGUF`, saved from `mmproj-F16.gguf` |
 | `qwen-image-2.1` | `qwen_image_2.1_vae_bf16.safetensors` | `unsloth/Qwen-Image-2.1-FP8`, `vae/` |
 | `strata/models/swift-IQ3_XXS` | both `Swift-Qwen3.8-Flash-Next-GSQ-RCO-IQ3_XXS-0000N-of-00002.gguf` shards | `ukisai/Swift-1.5-Qwen3.8-Flash-Next-GSQ-RCO-GGUF` |
+| `breeze/model` | every file except `assets/` (two `model-0000N-of-00002.safetensors` shards, `audio_tokenizer/`, the config and tokenizer files, and `LICENSE`) | `BreezeBlue/Breeze-TTS-2` |
 
 The Strata engines also read files that Strata's tools build from those shards. Run the tools from the `loki-strata` image after `loki setup` builds it, with `~/.llms/strata` mounted writable:
 

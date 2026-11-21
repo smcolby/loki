@@ -70,6 +70,21 @@ tts:
   image: ghcr.io/remsky/kokoro-fastapi-cpu:v0.9.0  # Kokoro-FastAPI release
   voice: af_heart        # Voice used when a request names none
 
+# Breeze TTS 2 clones voices and reads text aloud in a web Studio at /breeze/. It loads
+# when you generate speech and shares the GPU with every other engine, so using it
+# unloads the chat model and the next chat request unloads Breeze. Its weights and code
+# are licensed for research and non-commercial use only. Put the checkpoint
+# (BreezeBlue/Breeze-TTS-2 on Hugging Face) in <data_dir>/model; voices, saved audio,
+# and compile caches are kept beside it.
+speech:
+  enabled: false
+  data_dir: ~/.llms/breeze  # model/, library/ (voices and audio), cache/
+  ref: a43d19e718b322e1cb3b2aa66f6d37d7945f4b21  # Breeze inference code commit to build
+  rocm_version: 7.2.4    # ROCm release of the PyTorch base image
+  torch_version: 2.9.1   # PyTorch release of the base image; Breeze pins 2.9.1
+  args:                  # Extra breeze_infer.api options
+    - --fast-depth-decoder  # Roughly doubles generation speed; other fast stages add no speed
+
 # Text model the gateway loads when it starts, so the first prompt skips the load.
 # It stays loaded until a request for another model swaps it out. Leave it out to
 # load nothing until the first request, for example:

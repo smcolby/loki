@@ -4,7 +4,7 @@ import yaml
 from click.testing import CliRunner
 
 from loki.cli import cli
-from loki.config import LokiConfig
+from loki.config import LokiConfig, SpeechConfig
 
 
 def test_start_runs_compose_up(mocker, sample_config):
@@ -202,3 +202,47 @@ def test_start_warns_when_avahi_publish_not_installed(mocker, sample_config):
     mock_avahi.assert_not_called()
     assert "Warning" in result.output
     assert "avahi-publish-address" in result.output
+
+
+def _enable_speech(config, tmp_path, checkpoint=True):
+    """Enable the speech engine with its data directory under ``tmp_path``."""
+    data_dir = tmp_path / "breeze"
+    (data_dir / "model").mkdir(parents=True)
+    if checkpoint:
+        (data_dir / "model" / "config.json").write_text("{}")
+    config.speech = SpeechConfig(enabled=True, data_dir=data_dir)
+    return data_dir
+
+
+def test_start_writes_the_speech_service_and_creates_its_directories(
+    mocker, sample_config, tmp_path
+):
+    """Starting with the speech engine routes /breeze and creates its library and cache."""
+    data_dir = _enable_speech(sample_config, tmp_path)
+    mocker.patch("loki.cli.load_config", return_value=sample_config)
+
+    result = CliRunner().invoke(cli, ["start"])
+
+    assert result.exit_code == 0
+    assert (data_dir / "library").is_dir()
+    assert (data_dir / "cache").is_dir()
+    assert "handle /breeze*" in (tmp_path / "Caddyfile").read_text()
+    assert "speech-breeze=http://speech-breeze:8080" in (tmp_path / ".env").read_text()
+    services = yaml.safe_load((tmp_path / "compose.engines.yaml").read_text())["services"]
+    assert list(services) == ["speech-breeze"]
+    assert "Model API (llama, speech-breeze)" in result.output
+
+
+def test_start_aborts_when_the_breeze_checkpoint_is_missing(mocker, sample_config, tmp_path):
+    """Without the checkpoint, start stops before writing files or starting the stack."""
+    data_dir = _enable_speech(sample_config, tmp_path, checkpoint=False)
+    mocker.patch("loki.cli.load_config", return_value=sample_config)
+    mock_run = mocker.patch("loki.cli.subprocess.run", autospec=True)
+
+    result = CliRunner().invoke(cli, ["start"])
+
+    assert result.exit_code != 0
+    assert f"Breeze checkpoint not found in {data_dir / 'model'}" in result.output
+    mock_run.assert_not_called()
+    assert not (data_dir / "library").exists()
+    assert not (tmp_path / ".env").exists()
