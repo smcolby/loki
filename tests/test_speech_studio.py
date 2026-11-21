@@ -108,3 +108,51 @@ def test_playback_started_by_the_rule_never_runs_dry(rate):
     )
 
     assert outcome["playbackEnds"] >= outcome["generationEnds"] - 0.01
+
+
+@pytest.mark.parametrize(
+    ("text", "chapters"),
+    [
+        ("Just words.", 1),
+        ("# One\nFirst.\n## Two\nSecond.", 2),
+        ("Preface.\n# One\nFirst.", 2),
+        ("# Empty\n# Real\nBody.", 1),
+        ("#hashtag\n### Deeper\nBody.", 1),
+        ("# Only a heading", 0),
+        ("", 0),
+    ],
+    ids=["none", "two", "preface", "empty heading", "not headings", "no body", "blank"],
+)
+def test_chapter_count_follows_the_servers_heading_rule(text, chapters):
+    """The preview counts a chapter at each heading that has text, plus text before the first."""
+    assert run_logic(f"countChapters({json.dumps(text)})") == chapters
+
+
+def test_job_time_left_uses_the_pace_measured_so_far():
+    """A quarter of the characters took 50 s, so the other 750 take 150 s."""
+    job = {"chars_total": 1000, "chars_done": 250, "generation_s": 50}
+
+    assert run_logic(f"jobSecondsLeft({json.dumps(job)})") == pytest.approx(150.0)
+
+
+def test_job_time_left_before_any_part_is_done_uses_the_measured_rate():
+    """With nothing made yet, 1,000 characters at 0.075 s each and 0.77x real time is 97.4 s."""
+    job = {"chars_total": 1000, "chars_done": 0, "generation_s": 0}
+
+    assert run_logic(f"jobSecondsLeft({json.dumps(job)})") == pytest.approx(97.4, abs=0.1)
+
+
+def test_a_finished_job_has_no_time_left():
+    """No characters remain, so no time does."""
+    job = {"chars_total": 500, "chars_done": 500, "generation_s": 400}
+
+    assert run_logic(f"jobSecondsLeft({json.dumps(job)})") == 0
+
+
+@pytest.mark.parametrize(
+    ("seconds", "text"),
+    [(59, "59 s"), (61, "1 min 1 s"), (3725, "1 h 2 min"), (36000, "10 h 0 min")],
+)
+def test_durations_read_in_hours_for_book_length_jobs(seconds, text):
+    """Narration of a book runs for hours, so durations over an hour show hours and minutes."""
+    assert run_logic(f"formatSeconds({seconds})") == text

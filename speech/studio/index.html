@@ -65,6 +65,7 @@
   </header>
   <nav role="tablist">
     <button role="tab" aria-selected="true" data-tab="generate">Generate</button>
+    <button role="tab" aria-selected="false" data-tab="narrate">Narrate</button>
     <button role="tab" aria-selected="false" data-tab="voices">Voices</button>
     <button role="tab" aria-selected="false" data-tab="library">Library</button>
   </nav>
@@ -117,6 +118,40 @@
         <div class="muted" id="saveVoiceMsg"></div>
       </div>
     </div>
+  </section>
+
+  <section id="tab-narrate" hidden>
+    <div class="panel">
+      <h2>Narrate a document</h2>
+      <p class="muted">Paste text or load a .txt or .md file. Start each chapter with a line such as <code># Chapter title</code> (one or two # signs). Each chapter becomes a separate audio file in the Library, so a long job can run overnight and be played chapter by chapter. A job saves every part as it is made and can be stopped and resumed. While a job runs, Breeze occupies the GPU: Open WebUI and agent requests wait 2 minutes and then fail, so avoid them until the job is done or stopped.</p>
+      <div class="row">
+        <div><label for="nTitle">Title</label><input type="text" id="nTitle" maxlength="40" placeholder="Used in each chapter's file name"></div>
+        <div><label for="nFile">Text file (optional)</label><input type="file" id="nFile" accept=".txt,.md,text/plain,text/markdown"></div>
+      </div>
+      <label for="nText">Text</label>
+      <textarea id="nText" style="min-height:220px" placeholder="# Introduction&#10;First chapter text...&#10;&#10;# Methods&#10;Second chapter text..."></textarea>
+      <div class="muted" id="nCount"></div>
+      <div class="row">
+        <div>
+          <label for="nVoice">Voice</label>
+          <select id="nVoice"><option value="">No saved voice (Breeze picks one each time)</option></select>
+        </div>
+        <div>
+          <label for="nSeed">Seed</label>
+          <input type="number" id="nSeed" value="42" min="0" max="2147000000">
+        </div>
+      </div>
+      <label for="nInstruction">Instruction (optional)</label>
+      <input type="text" id="nInstruction" maxlength="1000" placeholder="Leave empty to clone the saved voice as it is.">
+      <label for="nCfg">Instruction strength: <span id="nCfgValue">1.0</span></label>
+      <input type="range" id="nCfg" min="1" max="6" step="0.5" value="1" disabled>
+      <label><input type="checkbox" id="nTitles" checked> Read each chapter heading aloud before its text</label>
+      <div class="actions">
+        <button class="primary" id="nCreate">Create and start</button>
+        <span class="muted" id="nMsg"></span>
+      </div>
+    </div>
+    <div class="panel"><h2>Jobs</h2><div id="jobList"></div></div>
   </section>
 
   <section id="tab-voices" hidden>
@@ -177,6 +212,33 @@ function secondsUntilStart(chars, received, elapsed) {
   if (rate <= 0) return null;
   return Math.max(0, audioNeeded(chars, received, elapsed) - received) / rate;
 }
+
+const GENERATION_RATE = 0.77;     // measured: seconds of speech made per second of generation on this GPU
+
+function formatSeconds(seconds) {
+  const s = Math.round(seconds);
+  if (s >= 3600) return `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min`;
+  return s >= 60 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${s} s`;
+}
+
+// Chapters the server will make: a line that starts with one or two # and a space begins one, and a
+// heading with no text after it is dropped
+function countChapters(text) {
+  let count = 0, body = false;
+  for (const line of text.split("\n")) {
+    if (/^#{1,2}[ \t]+\S/.test(line)) { if (body) count += 1; body = false; }
+    else if (line.trim()) body = true;
+  }
+  return count + (body ? 1 : 0);
+}
+
+// Seconds of generation a job has left, from the pace measured so far or from the prior before any part is done
+function jobSecondsLeft(job) {
+  const left = job.chars_total - job.chars_done;
+  if (left <= 0) return 0;
+  const measured = job.chars_done > 0 && job.generation_s > 0;
+  return left * (measured ? job.generation_s / job.chars_done : SECONDS_PER_CHAR / GENERATION_RATE);
+}
 // </logic>
 
 const $ = (id) => document.getElementById(id);
@@ -194,11 +256,6 @@ function el(tag, attrs = {}, ...children) {
   return node;
 }
 
-function formatSeconds(seconds) {
-  const s = Math.round(seconds);
-  return s >= 60 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${s} s`;
-}
-
 async function request(path, options = {}) {
   const response = await fetch(api(path), { ...options, headers: { ...HEADERS, ...(options.headers || {}) } });
   if (!response.ok) {
@@ -213,7 +270,8 @@ async function request(path, options = {}) {
 document.querySelectorAll("nav button").forEach((button) => {
   button.addEventListener("click", () => {
     document.querySelectorAll("nav button").forEach((b) => b.setAttribute("aria-selected", String(b === button)));
-    for (const name of ["generate", "voices", "library"]) $(`tab-${name}`).hidden = name !== button.dataset.tab;
+    for (const name of ["generate", "narrate", "voices", "library"]) $(`tab-${name}`).hidden = name !== button.dataset.tab;
+    if (button.dataset.tab === "narrate") refreshJobs();
     if (button.dataset.tab === "voices") refreshVoices();
     if (button.dataset.tab === "library") refreshOutputs();
   });
@@ -224,7 +282,11 @@ async function pollStatus() {
     const status = await (await request("status")).json();
     const labels = { stopped: "Breeze is not loaded", starting: "Breeze is loading", ready: "Breeze is ready" };
     let text = labels[status.state] || status.state;
-    if (status.generating && status.progress.chunks) text += `, speaking part ${status.progress.chunk} of ${status.progress.chunks}`;
+    if (status.generating && status.progress.chapters) {
+      text += `, narrating chapter ${status.progress.chapter} of ${status.progress.chapters}, part ${status.progress.chunk} of ${status.progress.chunks}`;
+    } else if (status.generating && status.progress.chunks) {
+      text += `, speaking part ${status.progress.chunk} of ${status.progress.chunks}`;
+    }
     $("state").textContent = text;
   } catch (e) {
     $("state").textContent = "Studio unreachable";
@@ -238,11 +300,12 @@ let voices = [];
 
 async function refreshVoices() {
   voices = (await (await request("voices")).json()).voices;
-  const select = $("voice");
-  const chosen = select.value;
-  select.replaceChildren(el("option", { value: "" }, "No saved voice (Breeze picks one each time)"));
-  for (const voice of voices) select.append(el("option", { value: voice.id }, voice.label));
-  select.value = voices.some((v) => v.id === chosen) ? chosen : "";
+  for (const select of [$("voice"), $("nVoice")]) {
+    const chosen = select.value;
+    select.replaceChildren(el("option", { value: "" }, "No saved voice (Breeze picks one each time)"));
+    for (const voice of voices) select.append(el("option", { value: voice.id }, voice.label));
+    select.value = voices.some((v) => v.id === chosen) ? chosen : "";
+  }
 
   const list = $("voiceList");
   list.replaceChildren();
@@ -328,6 +391,113 @@ async function refreshOutputs() {
          } }, "Delete"))));
   }
 }
+
+// ---- narration jobs ----
+const STATE_LABELS = { ready: "Not started", running: "Running", paused: "Paused", interrupted: "Interrupted",
+                       failed: "Failed", done: "Done" };
+
+function updateNarrateControls() {
+  const text = $("nText").value;
+  const chars = text.length;
+  const speech = chars * SECONDS_PER_CHAR;
+  $("nCount").textContent = chars
+    ? `${countChapters(text)} chapter(s), ${chars.toLocaleString()} characters: about ${formatSeconds(speech)} of speech, roughly ${formatSeconds(speech / GENERATION_RATE)} to make.`
+    : "";
+  const has = $("nInstruction").value.trim().length > 0;
+  $("nCfg").disabled = !has;
+  if (!has) $("nCfg").value = "1";
+  $("nCfgValue").textContent = Number($("nCfg").value).toFixed(1);
+}
+["nText", "nInstruction", "nCfg"].forEach((id) => $(id).addEventListener("input", updateNarrateControls));
+updateNarrateControls();
+
+$("nFile").addEventListener("change", async () => {
+  const file = $("nFile").files[0];
+  if (!file) return;
+  $("nText").value = await file.text();
+  if (!$("nTitle").value) $("nTitle").value = file.name.replace(/\.[^.]+$/, "").slice(0, 40);
+  updateNarrateControls();
+});
+
+async function jobAction(job, action) {
+  try {
+    await request(`jobs/${job.id}/${action}`, { method: "POST" });
+  } catch (error) {
+    alert(error.message);
+  }
+  refreshJobs();
+}
+
+async function deleteJob(job) {
+  try {
+    await request(`jobs/${job.id}`, { method: "DELETE" });
+  } catch (error) {
+    alert(error.message);
+  }
+  refreshJobs();
+}
+
+async function refreshJobs() {
+  const jobs = (await (await request("jobs")).json()).jobs;
+  const list = $("jobList");
+  list.replaceChildren();
+  if (!jobs.length) list.append(el("div", { class: "muted" }, "No narration jobs yet."));
+  for (const job of jobs) {
+    const share = job.chunks_total ? (job.chunks_done / job.chunks_total) * 100 : 0;
+    const bar = el("div", { class: "bar" }, el("div", { class: "fill", style: `width:${share}%; background:var(--bar-play)` }));
+    const progress = `${job.chunks_done} of ${job.chunks_total} parts, ${formatSeconds(job.speech_s)} of audio made`
+      + (job.state === "running" || job.state === "paused" || job.state === "interrupted"
+         ? `, about ${formatSeconds(jobSecondsLeft(job))} left` : "");
+    const chapters = job.chapters.map((chapter, number) => {
+      const links = chapter.output_id
+        ? ["wav", "m4a", "mp3"].map((format) => el("a", { href: api(`outputs/${chapter.output_id}/audio?format=${format}`), download: "" }, format.toUpperCase()))
+        : [el("span", { class: "muted" }, `${chapter.chunks_done} of ${chapter.chunks_total} parts`)];
+      return el("div", { class: "meta" }, el("span", {}, `${number + 1}. ${chapter.title}`), ...links);
+    });
+    const warnings = job.chapters.flatMap((chapter) => chapter.warnings.map((w) => `${chapter.title}, ${w}`));
+    const restartable = ["ready", "paused", "interrupted", "failed"].includes(job.state);
+    list.append(el("div", { class: "item" },
+      el("div", { class: "meta" }, el("strong", {}, job.title),
+         el("span", { class: "muted" }, `${STATE_LABELS[job.state] || job.state}${job.voice_label ? `, voice ${job.voice_label}` : ""}`)),
+      bar,
+      el("div", { class: "muted" }, progress),
+      ...(job.error ? [el("div", { class: "error" }, job.error)] : []),
+      ...(warnings.length ? [el("div", { class: "warn" }, `${warnings.length} part(s) failed the quality check on every attempt, so the closest result was used: ${warnings.join("; ")}`)] : []),
+      ...chapters,
+      el("div", { class: "actions" },
+        ...(restartable ? [el("button", { class: "primary", onclick: () => jobAction(job, "start") }, job.state === "ready" ? "Start" : "Resume")] : []),
+        ...(job.state === "running" ? [el("button", { class: "secondary", onclick: () => jobAction(job, "stop") }, "Stop")] : []),
+        ...(job.state !== "running" ? [el("button", { class: "secondary", onclick: () => {
+          if (confirm(`Delete the job "${job.title}"? Chapters already finished stay in the Library.`)) deleteJob(job);
+        } }, "Delete")] : []))));
+  }
+}
+setInterval(() => { if (!$("tab-narrate").hidden) refreshJobs().catch(() => {}); }, 3000);
+
+$("nCreate").addEventListener("click", async () => {
+  const message = $("nMsg");
+  message.className = "muted";
+  const text = $("nText").value.trim();
+  if (!text) { message.textContent = "Enter or load some text first."; return; }
+  const body = { text, title: $("nTitle").value.trim(), voice_id: $("nVoice").value,
+                 seed: Number($("nSeed").value || 42), speak_titles: $("nTitles").checked };
+  if ($("nInstruction").value.trim()) { body.instruction = $("nInstruction").value.trim(); body.cfg_scale = Number($("nCfg").value); }
+  $("nCreate").disabled = true;
+  try {
+    message.textContent = "Saving the job...";
+    const job = await (await request("jobs", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                body: JSON.stringify(body) })).json();
+    $("nText").value = ""; $("nFile").value = ""; updateNarrateControls();
+    message.textContent = "Saved. Starting; if another model is loaded it is unloaded first, which can take a minute...";
+    await request(`jobs/${job.id}/start`, { method: "POST" });
+    message.textContent = "Started.";
+  } catch (error) {
+    message.className = "error";
+    message.textContent = `${error.message}. If the job was saved, start it from the list below.`;
+  }
+  $("nCreate").disabled = false;
+  refreshJobs();
+});
 
 // ---- generation and buffered playback ----
 const textBox = $("text"), instruction = $("instruction"), cfg = $("cfg");
