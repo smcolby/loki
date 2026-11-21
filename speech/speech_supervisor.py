@@ -49,6 +49,7 @@ from narration import (
     split_chapters,
     write_json,
 )
+from textimport import ImportFailureError, Options, import_document
 
 log = logging.getLogger("speech")
 
@@ -64,6 +65,7 @@ TARGET_RMS_DB = -20.0
 PEAK_CEILING_DB = -3.5
 CAP_FRAMES = 1499
 MAX_TEXT_CHARS = 60_000
+MAX_IMPORT_BYTES = 50 * 1024**2
 CHUNK_CHARS = 500
 # A narration job speaks whole paragraphs where it can. Breeze stops at CAP_FRAMES (119.9 s), and
 # measured pace ran from 0.066 to 0.089 s per character, so 1200 characters ends at 107 s at worst
@@ -692,6 +694,7 @@ class Supervisor:
             web.get("/api/outputs/{output_id}/audio", self.output_audio),
             web.post("/api/generate", self.generate),
             web.get("/api/jobs", self.list_jobs),
+            web.post("/api/import", self.import_file),
             web.post("/api/jobs", self.create_job),
             web.get("/api/jobs/{job_id}", self.get_job),
             web.delete("/api/jobs/{job_id}", self.delete_job),
@@ -1038,6 +1041,42 @@ class Supervisor:
             return _error(404, "no such job")
         return web.json_response(job)
 
+    async def import_file(self, request: web.Request) -> web.Response:
+        """Turn an uploaded EPUB, text, or Markdown file into chapter-format text for review.
+
+        The multipart form has the file as ``file``, and the options ``citations``,
+        ``author_year``, ``links`` and ``captions`` as ``1`` or ``0``. The response is
+        ``title``, ``text``, ``chapters`` (title and size), and ``warnings`` (what was
+        removed, with counts). Nothing is stored: the Studio shows the text for editing,
+        and a job is created from whatever text it then sends.
+        """
+        form = await request.post()
+        upload = form.get("file")
+        if not hasattr(upload, "file"):
+            return _error(400, "send the file as the multipart field 'file'")
+        data = upload.file.read(MAX_IMPORT_BYTES + 1)  # type: ignore[union-attr]
+        if len(data) > MAX_IMPORT_BYTES:
+            return _error(413, f"the file is over {MAX_IMPORT_BYTES // 1024**2} MB")
+
+        def flag(field: str, default: bool) -> bool:
+            value = form.get(field)
+            return default if value is None else str(value).lower() not in ("0", "false", "off", "")
+
+        options = Options(
+            citations=flag("citations", True),
+            author_year=flag("author_year", True),
+            links=flag("links", True),
+            captions=flag("captions", False),
+        )
+        filename = str(getattr(upload, "filename", "") or "")
+
+        # Parse off the event loop so a large book does not stall status requests or a running job
+        try:
+            book = await asyncio.to_thread(import_document, data, filename, options)
+        except ImportFailureError as exc:
+            return _error(400, str(exc))
+        return web.json_response(book.as_dict())
+
     async def create_job(self, request: web.Request) -> web.Response:
         """Save a narration job for long text; it starts when asked and does not need the GPU.
 
@@ -1066,11 +1105,11 @@ class Supervisor:
         if not isinstance(speak_titles, bool):
             return _error(400, "speak_titles must be true or false")
 
-        title = re.sub(r"\s+", " ", str(body.get("title", ""))).strip()[:40]
+        title = re.sub(r"\s+", " ", str(body.get("title", ""))).strip()[:80]
         chapters = split_chapters(text, title or "Narration")
         if not chapters or len(chapters) > MAX_CHAPTERS:
             return _error(400, f"the text must have 1 to {MAX_CHAPTERS} chapters with text")
-        title = title or re.sub(r"\s+", " ", chapters[0].title)[:40]
+        title = title or re.sub(r"\s+", " ", chapters[0].title)[:80]
         plan: list[list[tuple[str, float]]] = []
         for chapter in chapters:
             chunks = plan_chunks(chapter.body)

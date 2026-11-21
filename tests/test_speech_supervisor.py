@@ -16,6 +16,8 @@ import soundfile as sf
 import speech_supervisor as sup
 from aiohttp import ClientSession, FormData
 
+from tests.epub_builder import make_epub, page
+
 FAKE = Path(__file__).parent / "fake_breeze.py"
 STUDIO = {sup.STUDIO_HEADER: "1"}
 
@@ -245,6 +247,78 @@ def test_job_chunk_limit_ends_before_breeze_stops_at_the_slowest_measured_pace()
     assert sup.JOB_CHUNK_CHARS * 0.089 < sup.CAP_FRAMES * 0.08
 
 
+# ---- import ----
+
+
+def upload_form(data: bytes, filename: str, **fields: str) -> FormData:
+    """Return a multipart form with a file and extra fields."""
+    form = FormData()
+    form.add_field("file", data, filename=filename, content_type="application/octet-stream")
+    for key, value in fields.items():
+        form.add_field(key, value)
+    return form
+
+
+async def import_upload(client, data: bytes, filename: str, **fields: str):
+    """Post a file to /api/import and return the response."""
+    return await client.post(
+        "/api/import", data=upload_form(data, filename, **fields), headers=STUDIO
+    )
+
+
+async def test_import_turns_an_epub_into_chapter_text_with_warnings(client):
+    """The response has the book title, chapter-format text, chapter sizes, and what was removed."""
+    files = {"a.xhtml": page("<h1>One</h1><p>It works [3] here.</p>")}
+    epub = make_epub(files, [("a.xhtml", "One")], title="My Book")
+
+    response = await import_upload(client, epub, "book.epub")
+
+    assert response.status == 200
+    body = await response.json()
+    assert body["title"] == "My Book"
+    assert body["text"] == "# One\n\nIt works here.\n"
+    assert body["chapters"] == [{"title": "One", "chars": 14}]
+    assert body["warnings"] == [{"kind": "numeric citation", "count": 1, "sample": "[3]"}]
+
+
+async def test_import_reads_plain_text_and_applies_the_options(client):
+    """A text file is imported as written, and a field of 0 turns a removal off."""
+    text = b"Chapter 1\n\nIt works [3] here.\n"
+
+    on = await (await import_upload(client, text, "a.txt")).json()
+    off = await (await import_upload(client, text, "a.txt", citations="0")).json()
+
+    assert "It works here." in on["text"]
+    assert "It works [3] here." in off["text"]
+
+
+@pytest.mark.parametrize(
+    ("data", "filename", "message"),
+    [
+        (b"%PDF-1.7 abc", "paper.pdf", "PDF"),
+        (b"PK\x03\x04 broken", "book.epub", "valid EPUB"),
+        (b"abc\x00def", "a.txt", "not text"),
+    ],
+    ids=["pdf", "damaged epub", "binary"],
+)
+async def test_import_explains_why_a_file_cannot_be_read(client, data, filename, message):
+    """An unsupported or damaged file gets a 400 with a reason, not a server error."""
+    response = await import_upload(client, data, filename)
+
+    assert response.status == 400
+    assert message in (await response.json())["error"]["message"]
+
+
+async def test_import_refuses_a_request_with_no_file_or_a_file_over_the_limit(client, monkeypatch):
+    """A missing file field is a 400, and a file over the limit is a 413."""
+    missing = await client.post("/api/import", data={"citations": "1"}, headers=STUDIO)
+    monkeypatch.setattr(sup, "MAX_IMPORT_BYTES", 10)
+    large = await import_upload(client, b"x" * 11, "a.txt")
+
+    assert missing.status == 400
+    assert large.status == 413
+
+
 # ---- child process ----
 
 
@@ -358,7 +432,9 @@ async def test_unload_stops_breeze_and_is_refused_while_busy(client, child):
     assert await (await client.get("/health")).json() == {"status": "ok", "loaded": False}
 
 
-@pytest.mark.parametrize("path", ["/api/generate", "/api/jobs", f"/api/jobs/{'0' * 32}/start"])
+@pytest.mark.parametrize(
+    "path", ["/api/generate", "/api/jobs", "/api/import", f"/api/jobs/{'0' * 32}/start"]
+)
 async def test_changes_without_the_studio_header_are_refused(client, path):
     """A cross-site form post cannot add the header, so changes without it get 403."""
     response = await client.post(path, data=speak_form("Hello there."))
@@ -882,10 +958,10 @@ async def test_create_job_joins_short_paragraphs_into_one_chunk(client, tmp_path
 
 
 async def test_create_job_titles_itself_after_the_first_chapter(client):
-    """Without a title, the first chapter's title names the job, cut to 40 characters."""
-    _, job = await create_job(client, "# " + "Long title " * 10 + "\nBody words here.")
+    """Without a title, the first chapter's title names the job, cut to 80 characters."""
+    _, job = await create_job(client, "# " + "Long title " * 20 + "\nBody words here.")
 
-    assert 0 < len(job["title"]) <= 40
+    assert 0 < len(job["title"]) <= 80
 
 
 @pytest.mark.parametrize(

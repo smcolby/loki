@@ -123,11 +123,19 @@
   <section id="tab-narrate" hidden>
     <div class="panel">
       <h2>Narrate a document</h2>
-      <p class="muted">Paste text or load a .txt or .md file. Start each chapter with a line such as <code># Chapter title</code> (one or two # signs). Each chapter becomes a separate audio file in the Library, so a long job can run overnight and be played chapter by chapter. A job saves every part as it is made and can be stopped and resumed. While a job runs, Breeze occupies the GPU: Open WebUI and agent requests wait 2 minutes and then fail, so avoid them until the job is done or stopped.</p>
+      <p class="muted">Paste text, or load an EPUB, .txt or .md file to read its chapters into the box below for review. Start each chapter with a line such as <code># Chapter title</code> (one or two # signs). Each chapter becomes a separate audio file in the Library, so a long job can run overnight and be played chapter by chapter. A job saves every part as it is made and can be stopped and resumed. While a job runs, Breeze occupies the GPU: Open WebUI and agent requests wait 2 minutes and then fail, so avoid them until the job is done or stopped.</p>
       <div class="row">
-        <div><label for="nTitle">Title</label><input type="text" id="nTitle" maxlength="40" placeholder="Used in each chapter's file name"></div>
-        <div><label for="nFile">Text file (optional)</label><input type="file" id="nFile" accept=".txt,.md,text/plain,text/markdown"></div>
+        <div><label for="nTitle">Title</label><input type="text" id="nTitle" maxlength="80" placeholder="Used in each chapter's file name"></div>
+        <div><label for="nFile">Book or text file (optional)</label><input type="file" id="nFile" accept=".epub,.txt,.md,application/epub+zip,text/plain,text/markdown"></div>
       </div>
+      <div class="row">
+        <label><input type="checkbox" id="nCitations" checked> Remove citations such as [12]</label>
+        <label><input type="checkbox" id="nAuthorYear" checked> Remove (Author, 2019) citations</label>
+        <label><input type="checkbox" id="nLinks" checked> Remove web addresses</label>
+        <label><input type="checkbox" id="nCaptions"> Read figure captions</label>
+      </div>
+      <div class="muted">These options apply when a file is chosen. Choose the file again to apply changed options.</div>
+      <div class="muted" id="nImport"></div>
       <label for="nText">Text</label>
       <textarea id="nText" style="min-height:220px" placeholder="# Introduction&#10;First chapter text...&#10;&#10;# Methods&#10;Second chapter text..."></textarea>
       <div class="muted" id="nCount"></div>
@@ -245,6 +253,16 @@ function retryNote(job) {
   const reasons = job.chapters.flatMap((chapter) => (chapter.retries || []).map((why) => `${chapter.title}, ${why}`));
   if (!reasons.length) return "";
   return `${reasons.length} attempt(s) failed the quality check or Breeze and were spoken again: ${reasons.join("; ")}`;
+}
+
+// Lines that summarize an import: the chapters and their size, then each kind of change with its count
+function importSummary(result) {
+  const chars = result.chapters.reduce((sum, chapter) => sum + chapter.chars, 0);
+  const lines = [`Read ${result.chapters.length} chapter(s), ${chars.toLocaleString("en-US")} characters. Review the text below before creating the job.`];
+  for (const warning of result.warnings) {
+    lines.push(`${warning.kind}: ${warning.count}${warning.sample ? ` (for example "${warning.sample}")` : ""}`);
+  }
+  return lines;
 }
 // </logic>
 
@@ -421,8 +439,22 @@ updateNarrateControls();
 $("nFile").addEventListener("change", async () => {
   const file = $("nFile").files[0];
   if (!file) return;
-  $("nText").value = await file.text();
-  if (!$("nTitle").value) $("nTitle").value = file.name.replace(/\.[^.]+$/, "").slice(0, 40);
+  const form = new FormData();
+  form.append("file", file);
+  for (const [field, id] of [["citations", "nCitations"], ["author_year", "nAuthorYear"], ["links", "nLinks"], ["captions", "nCaptions"]]) {
+    form.append(field, $(id).checked ? "1" : "0");
+  }
+  $("nImport").textContent = "Reading the file...";
+  try {
+    const response = await fetch(api("import"), { method: "POST", headers: HEADERS, body: form });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || response.statusText);
+    $("nText").value = result.text;
+    if (!$("nTitle").value) $("nTitle").value = (result.title || file.name.replace(/\.[^.]+$/, "")).slice(0, 80);
+    $("nImport").replaceChildren(...importSummary(result).map((line) => el("div", {}, line)));
+  } catch (error) {
+    $("nImport").replaceChildren(el("div", { class: "error" }, `Could not read the file: ${error.message}`));
+  }
   updateNarrateControls();
 });
 

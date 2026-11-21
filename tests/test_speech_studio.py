@@ -174,3 +174,22 @@ def test_retry_note_lists_each_rejected_attempt_and_is_empty_without_any():
     assert note.startswith("2 attempt(s)")
     assert "One, part 3, attempt 1: silent" in note
     assert "Two, part 1, attempt 1: too short" in note
+
+
+def test_import_summary_reports_the_chapters_and_each_kind_of_change():
+    """The first line counts chapters and characters; each warning adds a counted line."""
+    result = {
+        "chapters": [{"title": "One", "chars": 1200}, {"title": "Two", "chars": 800}],
+        "warnings": [
+            {"kind": "numeric citation", "count": 12, "sample": "[3]"},
+            {"kind": "table skipped", "count": 2, "sample": ""},
+        ],
+    }
+
+    lines = run_logic(f"importSummary({json.dumps(result)})")
+
+    assert lines == [
+        "Read 2 chapter(s), 2,000 characters. Review the text below before creating the job.",
+        'numeric citation: 12 (for example "[3]")',
+        "table skipped: 2",
+    ]

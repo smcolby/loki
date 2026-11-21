@@ -295,11 +295,14 @@ class _Archive:
         self._infos = {info.filename: info for info in infos}
 
     def read(self, name: str) -> bytes | None:
-        """Return an entry's bytes, or None when it is missing or over the size limit."""
+        """Return an entry's bytes, or None when it is missing, too large, encrypted, or damaged."""
         info = self._infos.get(name)
         if info is None or info.file_size > MAX_ENTRY_BYTES:
             return None
-        return self._zip.read(info)
+        try:
+            return self._zip.read(info)
+        except (RuntimeError, NotImplementedError, zipfile.BadZipFile, EOFError):
+            return None
 
 
 def _xml(data: bytes | None, what: str) -> ET.Element:
