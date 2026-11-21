@@ -137,6 +137,8 @@ def test_new_job_counts_chunks_and_characters_per_chapter():
     assert (job["chunks_total"], job["chars_total"]) == (3, 12 + 16 + 12)
     assert [(c["chunks_total"], c["chars"]) for c in job["chapters"]] == [(2, 28), (1, 12)]
     assert job["chunks_done"] == 0
+    assert job["retries"] == 0
+    assert [chapter["retries"] for chapter in job["chapters"]] == [[], []]
     assert nar.ID_PATTERN.fullmatch(job["id"])
 
 

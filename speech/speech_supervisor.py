@@ -1148,14 +1148,14 @@ class Supervisor:
 
     async def _speak_checked(
         self, text: str, index: int, settings: dict[str, Any], voice: dict[str, Any] | None
-    ) -> tuple[bytes, str | None]:
+    ) -> tuple[bytes, str | None, list[str]]:
         """Speak one chunk, speaking it again with a new seed while it fails the quality check.
 
         Returns
         -------
-        tuple of (bytes, str or None)
-            The 16-bit PCM, and a warning when every attempt failed the check, in which case
-            the PCM is the attempt closest to the expected length.
+        tuple of (bytes, str or None, list of str)
+            The 16-bit PCM, a warning when every attempt failed the check (the PCM is then
+            the attempt closest to the expected length), and why each failed attempt failed.
 
         Raises
         ------
@@ -1166,6 +1166,7 @@ class Supervisor:
         """
         best: tuple[float, bytes, str] | None = None
         failure = ""
+        failed: list[str] = []
         for attempt in range(JOB_ATTEMPTS):
             seed = (settings["seed"] + index + attempt * RETRY_SEED_STEP) % SEED_MODULUS
             try:
@@ -1177,20 +1178,22 @@ class Supervisor:
             except (ChunkError, ClientError, TimeoutError) as exc:
                 failure = str(exc) or type(exc).__name__
                 log.warning("attempt %d at a chunk failed: %s", attempt + 1, failure)
+                failed.append(f"attempt {attempt + 1}: Breeze error, {failure}")
                 await self.child.ensure(self.session)
                 continue
             pcm = pcm[: len(pcm) & ~1]
             samples = np.frombuffer(pcm, dtype="<i2")
             reason = check_chunk(samples, text, hit_cap=len(pcm) / FRAME_BYTES >= CAP_FRAMES)
             if reason is None:
-                return pcm, None
+                return pcm, None, failed
             log.warning("attempt %d at a chunk was %s", attempt + 1, reason)
+            failed.append(f"attempt {attempt + 1}: {reason}")
             error = length_error(samples, text)
             if best is None or error < best[0]:
                 best = (error, pcm, reason)
         if best is None:
             raise ChunkError(f"Breeze failed {JOB_ATTEMPTS} times: {failure}")
-        return best[1], f"{best[2]} on all {JOB_ATTEMPTS} attempts; used the closest"
+        return best[1], f"{best[2]} on all {JOB_ATTEMPTS} attempts; used the closest", failed
 
     def _stitch_chapter(
         self, job: dict[str, Any], number: int, chunks: list[tuple[str, float]]
@@ -1284,7 +1287,7 @@ class Supervisor:
                         "chapters": len(plan),
                     }
                     started = time.monotonic()
-                    pcm, warning = await self._speak_checked(text, index, settings, voice)
+                    pcm, warning, failed = await self._speak_checked(text, index, settings, voice)
                     self.jobs.write_chunk(job_id, number, index, pcm)
                     spent = time.monotonic() - started
                     seconds = len(pcm) / 2 / SAMPLE_RATE
@@ -1295,6 +1298,18 @@ class Supervisor:
                     job["chars_done"] += len(text)
                     if warning:
                         chapter["warnings"].append(f"part {index + 1}: {warning}")
+
+                    # Record each rejected attempt so a high rate of retries shows in the job
+                    if failed:
+                        chapter["retries"].extend(f"part {index + 1}, {why}" for why in failed)
+                        job["retries"] += len(failed)
+                        log.warning(
+                            "job %s chapter %d part %d: %d attempt(s) rejected",
+                            job_id,
+                            number + 1,
+                            index + 1,
+                            len(failed),
+                        )
                     self.jobs.save(job)
                 output_id = await asyncio.to_thread(self._stitch_chapter, job, number, chunks)
                 chapter["output_id"], chapter["state"] = output_id, "done"

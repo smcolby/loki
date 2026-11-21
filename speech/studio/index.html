@@ -239,6 +239,13 @@ function jobSecondsLeft(job) {
   const measured = job.chars_done > 0 && job.generation_s > 0;
   return left * (measured ? job.generation_s / job.chars_done : SECONDS_PER_CHAR / GENERATION_RATE);
 }
+
+// Summary of the attempts that failed the quality check and were spoken again, or an empty string
+function retryNote(job) {
+  const reasons = job.chapters.flatMap((chapter) => (chapter.retries || []).map((why) => `${chapter.title}, ${why}`));
+  if (!reasons.length) return "";
+  return `${reasons.length} attempt(s) failed the quality check or Breeze and were spoken again: ${reasons.join("; ")}`;
+}
 // </logic>
 
 const $ = (id) => document.getElementById(id);
@@ -463,6 +470,7 @@ async function refreshJobs() {
       el("div", { class: "muted" }, progress),
       ...(job.error ? [el("div", { class: "error" }, job.error)] : []),
       ...(warnings.length ? [el("div", { class: "warn" }, `${warnings.length} part(s) failed the quality check on every attempt, so the closest result was used: ${warnings.join("; ")}`)] : []),
+      ...(retryNote(job) ? [el("div", { class: "muted" }, retryNote(job))] : []),
       ...chapters,
       el("div", { class: "actions" },
         ...(restartable ? [el("button", { class: "primary", onclick: () => jobAction(job, "start") }, job.state === "ready" ? "Start" : "Resume")] : []),

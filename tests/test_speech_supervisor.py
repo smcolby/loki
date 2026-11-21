@@ -932,6 +932,8 @@ async def test_a_job_speaks_every_chapter_into_a_library_output(
     assert by_title["My book - 01 Chapter One"]["duration_s"] == pytest.approx(3.5, abs=0.06)
     assert done["chapters"][0]["output_id"] == by_title["My book - 01 Chapter One"]["id"]
     assert [entry["seed"] for entry in logged(breeze_env)] == ["42", "43", "42", "43"]
+    assert done["retries"] == 0
+    assert [chapter["retries"] for chapter in done["chapters"]] == [[], []]
     assert not list((tmp_path / "data" / "jobs" / job["id"] / "chunks").iterdir())
     exported = await client.get(
         f"/api/outputs/{by_title['My book - 01 Chapter One']['id']}/audio?format=m4a"
@@ -992,6 +994,9 @@ async def test_a_chunk_that_fails_the_check_is_spoken_again_with_a_new_seed(
     assert done["state"] == "done"
     assert [entry["seed"] for entry in logged(breeze_env)] == ["42", str(42 + sup.RETRY_SEED_STEP)]
     assert done["chapters"][0]["warnings"] == []
+    (retry,) = done["chapters"][0]["retries"]
+    assert retry.startswith("part 1, attempt 1: too short")
+    assert done["retries"] == 1
 
 
 async def test_a_chunk_that_never_passes_is_used_with_a_warning(
@@ -1009,6 +1014,8 @@ async def test_a_chunk_that_never_passes_is_used_with_a_warning(
     (warning,) = done["chapters"][0]["warnings"]
     assert "too short" in warning
     assert f"all {sup.JOB_ATTEMPTS} attempts" in warning
+    assert len(done["chapters"][0]["retries"]) == sup.JOB_ATTEMPTS
+    assert done["retries"] == sup.JOB_ATTEMPTS
 
 
 async def test_a_job_fails_with_the_error_when_breeze_keeps_failing(

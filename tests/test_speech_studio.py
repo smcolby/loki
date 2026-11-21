@@ -156,3 +156,21 @@ def test_a_finished_job_has_no_time_left():
 def test_durations_read_in_hours_for_book_length_jobs(seconds, text):
     """Narration of a book runs for hours, so durations over an hour show hours and minutes."""
     assert run_logic(f"formatSeconds({seconds})") == text
+
+
+def test_retry_note_lists_each_rejected_attempt_and_is_empty_without_any():
+    """The job card names the chapter and the reason for every attempt that was spoken again."""
+    quiet = {"chapters": [{"title": "One", "retries": []}, {"title": "Two"}]}
+    retried = {
+        "chapters": [
+            {"title": "One", "retries": ["part 3, attempt 1: silent"]},
+            {"title": "Two", "retries": ["part 1, attempt 1: too short (0.1 s for 40 characters)"]},
+        ]
+    }
+
+    assert run_logic(f"retryNote({json.dumps(quiet)})") == ""
+    note = run_logic(f"retryNote({json.dumps(retried)})")
+    assert isinstance(note, str)
+    assert note.startswith("2 attempt(s)")
+    assert "One, part 3, attempt 1: silent" in note
+    assert "Two, part 1, attempt 1: too short" in note

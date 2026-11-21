@@ -212,6 +212,7 @@ def new_job(
         "chars_done": 0,
         "chunks_total": sum(len(chunks) for _, chunks in chapters),
         "chunks_done": 0,
+        "retries": 0,
         "speech_s": 0.0,
         "generation_s": 0.0,
         "chapters": [
@@ -225,6 +226,7 @@ def new_job(
                 "generation_s": 0.0,
                 "output_id": "",
                 "warnings": [],
+                "retries": [],
             }
             for chapter_title, chunks in chapters
         ],
