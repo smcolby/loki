@@ -507,7 +507,13 @@ def test_speech_tag_tracks_every_build_input(speech_sources):
     assert speech_tag(speech_sources) == first
     assert len(first) == 12
 
-    for name in ("Dockerfile", "speech_supervisor.py", "narration.py", "studio/index.html"):
+    for name in (
+        "Dockerfile",
+        "speech_supervisor.py",
+        "narration.py",
+        "textimport.py",
+        "studio/index.html",
+    ):
         path = speech_sources / name
         original = path.read_text()
         path.write_text("changed\n")

@@ -536,6 +536,7 @@ SPEECH_SOURCES = (
     "constraints.txt",
     "speech_supervisor.py",
     "narration.py",
+    "textimport.py",
     "studio/index.html",
 )
 
@@ -558,7 +559,7 @@ def speech_tag(source_dir: Path) -> str:
     ----------
     source_dir : Path
         Directory holding the speech image's Dockerfile, constraints, supervisor,
-        narration module, and Studio.
+        narration and import modules, and Studio.
 
     Returns
     -------
