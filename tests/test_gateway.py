@@ -33,6 +33,9 @@ class FakeEngine:
         app.router.add_post("/v1/images/edits", self.edit)
         app.router.add_post("/api/generate", self.speak)
         app.router.add_get("/api/voices", self.voices)
+        app.router.add_post("/api/jobs", self.create_job)
+        app.router.add_post("/api/jobs/{job_id}/start", self.start_job)
+        app.router.add_post("/api/jobs/{job_id}/stop", self.stop_job)
         app.router.add_get("/metrics", self.metrics)
         app.router.add_get("/", self.page)
         return app
@@ -111,6 +114,22 @@ class FakeEngine:
         """List saved voices from the supervisor's own storage, without loading the model."""
         self.calls.append("voices")
         return web.json_response({"voices": []})
+
+    async def create_job(self, _: web.Request) -> web.Response:
+        """Save a narration job from the supervisor's own storage, without loading the model."""
+        self.calls.append("create_job")
+        return web.json_response({"id": "0" * 32}, status=201)
+
+    async def start_job(self, _: web.Request) -> web.Response:
+        """Start a narration job, which loads the model like a generation."""
+        self.calls.append("start_job")
+        self.loaded.add(self.models[0])
+        return web.json_response({"state": "running"}, status=202)
+
+    async def stop_job(self, _: web.Request) -> web.Response:
+        """Stop a narration job without loading the model."""
+        self.calls.append("stop_job")
+        return web.json_response({"state": "paused"})
 
     async def edit(self, request: web.Request) -> web.Response:
         """Read an sd-server style multipart edit and record its fields and uploaded images."""
@@ -796,3 +815,55 @@ async def test_generation_without_the_studio_header_cannot_unload_the_loaded_mod
     assert response.status == 403
     assert llama.loaded == {"qwen"}
     assert speech.calls == []
+
+
+JOB_START = f"/breeze/api/jobs/{'0' * 32}/start"
+
+
+async def test_starting_a_narration_job_claims_the_gpu_from_the_loaded_engine(make_client, llama):
+    """Starting a job unloads the engine holding the GPU, like a generation request."""
+    speech = FakeEngine(["breeze-tts-2"])
+    client = await make_client(llama=llama, **{"speech-breeze": speech})
+    await _complete(client, "qwen")
+
+    response = await client.post(JOB_START, headers=STUDIO)
+
+    assert response.status == 202
+    assert llama.calls[-1] == "unload:qwen"
+    assert speech.calls == ["start_job"]
+
+
+async def test_starting_a_narration_job_without_the_studio_header_is_refused_first(
+    make_client, llama
+):
+    """A cross-site form post cannot start a job and unload the loaded model."""
+    speech = FakeEngine(["breeze-tts-2"])
+    client = await make_client(llama=llama, **{"speech-breeze": speech})
+    await _complete(client, "qwen")
+
+    response = await client.post(JOB_START)
+
+    assert response.status == 403
+    assert llama.loaded == {"qwen"}
+    assert speech.calls == []
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "call"),
+    [
+        ("post", "/breeze/api/jobs", "create_job"),
+        ("post", f"/breeze/api/jobs/{'0' * 32}/stop", "stop_job"),
+    ],
+    ids=["create", "stop"],
+)
+async def test_other_narration_requests_leave_the_gpu_alone(make_client, llama, method, path, call):
+    """Saving or stopping a job reaches the supervisor without unloading the loaded engine."""
+    speech = FakeEngine(["breeze-tts-2"])
+    client = await make_client(llama=llama, **{"speech-breeze": speech})
+    await _complete(client, "qwen")
+
+    response = await getattr(client, method)(path, json={}, headers=STUDIO)
+
+    assert response.status in (200, 201)
+    assert speech.calls == [call]
+    assert llama.loaded == {"qwen"}

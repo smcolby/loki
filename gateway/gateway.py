@@ -18,6 +18,7 @@ import email.policy
 import json
 import logging
 import os
+import re
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -51,6 +52,7 @@ TEXT_PATHS = (
 IMAGE_PATHS = ("/v1/images/generations", "/v1/images/edits")
 # The speech supervisor's generation path, which loads Breeze, and the model id it publishes
 SPEECH_GENERATE_PATH = "/api/generate"
+SPEECH_JOB_START = re.compile(r"/api/jobs/[0-9a-f]{32}/start")
 SPEECH_MODEL = "breeze-tts-2"
 # A page on another site can post a form to this address but cannot add a custom header
 STUDIO_HEADER = "X-Loki-Studio"
@@ -635,8 +637,9 @@ async def handle_speech(request: web.Request) -> web.StreamResponse:
     Everything under ``/breeze/`` is relayed to the speech supervisor with the
     prefix removed. The Studio page, the voice library, saved audio, and status
     read from the supervisor's own storage, so they pass through while another
-    engine holds the GPU. ``POST /breeze/api/generate`` loads Breeze, so it waits
-    for the GPU like a model request.
+    engine holds the GPU. ``POST /breeze/api/generate`` and starting a narration job
+    load Breeze, so they wait for the GPU like a model request. A job keeps running
+    after the start request ends, so the GPU lease covers only the start.
     """
     gateway: Gateway = request.app["gateway"]
     engine = next((e for e in gateway.engines if isinstance(e, SpeechEngine)), None)
@@ -654,7 +657,9 @@ async def handle_speech(request: web.Request) -> web.StreamResponse:
     if request.query_string:
         path += "?" + request.query_string
     body = await request.read()
-    if request.method != "POST" or path.partition("?")[0] != SPEECH_GENERATE_PATH:
+    route = path.partition("?")[0]
+    loads_breeze = route == SPEECH_GENERATE_PATH or SPEECH_JOB_START.fullmatch(route)
+    if request.method != "POST" or not loads_breeze:
         return await _forward(request, engine, body, path)
 
     # Refuse before claiming the GPU, so a cross-site form post cannot unload the loaded model
