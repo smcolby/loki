@@ -168,16 +168,76 @@ def test_split_text_keeps_closing_quotes_and_ellipses_with_their_sentence(text, 
     assert [piece for piece, _ in sup.split_text(text, limit)] == expected
 
 
-def test_split_text_lines_are_paragraphs_only_when_asked():
-    """Text with single newlines is one paragraph by default and one per line on request."""
-    text = "First line.\nSecond line.\nThird."
+LONG = "a" * 19 + "."
 
-    assert sup.split_text(text, 100) == [("First line. Second line. Third.", 0.0)]
-    assert sup.split_text(text, 100, lines_are_paragraphs=True) == [
-        ("First line.", sup.PARAGRAPH_PAUSE),
-        ("Second line.", sup.PARAGRAPH_PAUSE),
-        ("Third.", 0.0),
+
+@pytest.mark.parametrize(
+    ("text", "limit", "expected"),
+    [
+        ("One.\n\nTwo.", 20, [("One. Two.", 0.0)]),
+        ("Aaaa.\n\nBbbb.", 6, [("Aaaa.", sup.PARAGRAPH_PAUSE), ("Bbbb.", 0.0)]),
+        ("One.\n\n\n\nTwo.\n\nThree.", 11, [("One. Two.", sup.PARAGRAPH_PAUSE), ("Three.", 0.0)]),
+        (
+            "First line.\nSecond line.",
+            15,
+            [("First line.", sup.PARAGRAPH_PAUSE), ("Second line.", 0.0)],
+        ),
+        (
+            "A wrapped\nline here.\nNext one.",
+            25,
+            [("A wrapped line here.", sup.PARAGRAPH_PAUSE), ("Next one.", 0.0)],
+        ),
+        ("", 20, []),
+    ],
+    ids=[
+        "short paragraphs share a chunk",
+        "paragraphs that do not fit together stay apart",
+        "extra blank lines",
+        "a line that ends a sentence ends a paragraph",
+        "a line break inside a sentence joins the lines",
+        "empty",
+    ],
+)
+def test_plan_chunks_follows_paragraphs(text, limit, expected):
+    """Paragraphs that fit together share a chunk, and a long paragraph is cut evenly."""
+    assert sup.plan_chunks(text, limit) == expected
+
+
+def test_plan_chunks_cuts_a_long_paragraph_into_pieces_of_even_length():
+    """Four long sentences and a short one split as 2 and 3 sentences, not 3 and 2."""
+    text = f"{LONG} {LONG} {LONG} {LONG} Zzzz."
+
+    assert sup.plan_chunks(text, 63) == [
+        (f"{LONG} {LONG}", sup.SENTENCE_PAUSE),
+        (f"{LONG} {LONG} Zzzz.", 0.0),
     ]
+
+
+def test_plan_chunks_does_not_join_the_pieces_of_a_cut_paragraph_with_its_neighbors():
+    """Only whole paragraphs combine; the pieces of a paragraph cut at sentences stand alone."""
+    middle = ["Aaaaaaaaaa.", "Bbbbbbbbbb.", "Cccccccccc.", "Dddddddddd."]
+    text = "Hi.\n\n" + " ".join(middle) + "\n\nBye."
+
+    assert sup.plan_chunks(text, 30) == [
+        ("Hi.", sup.PARAGRAPH_PAUSE),
+        ("Aaaaaaaaaa. Bbbbbbbbbb.", sup.SENTENCE_PAUSE),
+        ("Cccccccccc. Dddddddddd.", sup.PARAGRAPH_PAUSE),
+        ("Bye.", 0.0),
+    ]
+
+
+def test_plan_chunks_keeps_every_word_within_the_limit():
+    """No word is lost or reordered and no chunk is over the limit, whatever the paragraph sizes."""
+    paragraphs = [
+        " ".join(f"Sentence {i}-{j} has a few words in it." for j in range(i % 7 + 1))
+        for i in range(40)
+    ]
+    text = "\n\n".join(paragraphs)
+
+    chunks = sup.plan_chunks(text, 200)
+
+    assert " ".join(piece for piece, _ in chunks).split() == text.split()
+    assert all(len(piece) <= 200 for piece, _ in chunks)
 
 
 def test_job_chunk_limit_ends_before_breeze_stops_at_the_slowest_measured_pace():
@@ -813,22 +873,12 @@ async def test_create_job_keeps_a_paragraph_whole_up_to_the_job_limit(client, tm
     ]
 
 
-async def test_create_job_reads_each_line_as_a_paragraph_when_there_are_no_blank_lines(
-    client, tmp_path
-):
-    """Text with only single newlines gets a paragraph pause after each line."""
-    _, job = await create_job(client, "First line.\nSecond line.", speak_titles=False)
-
-    plan = narration.JobStore(tmp_path / "data").plan(job["id"])
-    assert plan[0] == [("First line.", sup.PARAGRAPH_PAUSE), ("Second line.", 0.0)]
-
-
-async def test_create_job_joins_the_lines_of_a_paragraph_when_blank_lines_exist(client, tmp_path):
-    """In wrapped text with blank lines between paragraphs, a single newline is a space."""
+async def test_create_job_joins_short_paragraphs_into_one_chunk(client, tmp_path):
+    """Paragraphs that fit together within the job limit are spoken as one chunk."""
     _, job = await create_job(client, "One wrapped\nline.\n\nNext one.", speak_titles=False)
 
     plan = narration.JobStore(tmp_path / "data").plan(job["id"])
-    assert plan[0] == [("One wrapped line.", sup.PARAGRAPH_PAUSE), ("Next one.", 0.0)]
+    assert plan[0] == [("One wrapped line. Next one.", 0.0)]
 
 
 async def test_create_job_titles_itself_after_the_first_chapter(client):

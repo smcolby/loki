@@ -68,6 +68,8 @@ CHUNK_CHARS = 500
 # A narration job speaks whole paragraphs where it can. Breeze stops at CAP_FRAMES (119.9 s), and
 # measured pace ran from 0.066 to 0.089 s per character, so 1200 characters ends at 107 s at worst
 JOB_CHUNK_CHARS = 1200
+# A line that ends a sentence, optionally followed by a closing quote or bracket
+LINE_END = re.compile(r"[.!?][\"'\u201d\u2019)\]]*$")
 # Sentence ends: a period, question mark or exclamation mark, optionally followed by a closing
 # quote or bracket, then whitespace and a character that is not another dot of a spaced ellipsis
 SENTENCE_END = re.compile(r"(?:(?<=[.!?])|(?<=[.!?][\"'”’)\]]))\s+(?=[^\s.])")
@@ -146,14 +148,11 @@ def _wrap(sentence: str, limit: int) -> list[str]:
     return [*parts, sentence] if sentence else parts
 
 
-def split_text(
-    text: str, limit: int = CHUNK_CHARS, *, lines_are_paragraphs: bool = False
-) -> list[tuple[str, float]]:
+def split_text(text: str, limit: int = CHUNK_CHARS) -> list[tuple[str, float]]:
     r"""Cut text into chunks that end at sentence boundaries, with the pause after each.
 
-    A paragraph that fits the limit is one chunk. A longer paragraph is cut at sentence
-    boundaries, and a sentence over the limit is cut at a comma or space. Paragraph breaks
-    get a longer pause than sentence breaks, and the last chunk has none.
+    Paragraph breaks get a longer pause than sentence breaks, and the last chunk
+    has none.
 
     Parameters
     ----------
@@ -161,9 +160,6 @@ def split_text(
         Text to speak; blank lines separate paragraphs.
     limit : int, optional
         Most characters in one chunk. Default is ``CHUNK_CHARS``.
-    lines_are_paragraphs : bool, optional
-        Whether each line is a paragraph, for text with no blank lines. Default is False,
-        which joins the lines of a paragraph with spaces.
 
     Returns
     -------
@@ -174,12 +170,9 @@ def split_text(
     --------
     >>> split_text("One. Two.\n\nThree.", limit=9)
     [('One. Two.', 0.8), ('Three.', 0.0)]
-    >>> split_text("One.\nTwo.", lines_are_paragraphs=True)
-    [('One.', 0.8), ('Two.', 0.0)]
     """
     chunks: list[tuple[str, float]] = []
-    paragraphs = text.splitlines() if lines_are_paragraphs else re.split(r"\n\s*\n", text)
-    for paragraph in paragraphs:
+    for paragraph in re.split(r"\n\s*\n", text):
         paragraph = re.sub(r"\s+", " ", paragraph).strip()
         if not paragraph:
             continue
@@ -200,6 +193,126 @@ def split_text(
     if chunks:
         chunks[-1] = (chunks[-1][0], 0.0)
     return chunks
+
+
+def _paragraphs(text: str) -> list[str]:
+    """Return the paragraphs of ``text``.
+
+    A blank line ends a paragraph, and so does a line that ends a sentence. A line break
+    inside a sentence joins the lines, so hard-wrapped text still has whole paragraphs.
+    """
+    paragraphs: list[str] = []
+    for block in re.split(r"\n\s*\n", text):
+        current = ""
+        for line in block.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            current = f"{current} {line}".strip()
+            if LINE_END.search(line):
+                paragraphs.append(re.sub(r"\s+", " ", current))
+                current = ""
+        if current:
+            paragraphs.append(re.sub(r"\s+", " ", current))
+    return paragraphs
+
+
+def _balanced(parts: list[str], limit: int) -> list[str]:
+    """Join consecutive parts into the fewest pieces of at most ``limit`` characters.
+
+    Each part must fit the limit. Among the ways to make the fewest pieces, the one with the
+    smallest sum of squared piece lengths wins, which makes the lengths as equal as possible.
+    """
+    # Count the fewest pieces with a greedy pass
+    count, size = 1, len(parts[0])
+    for part in parts[1:]:
+        if size + 1 + len(part) > limit:
+            count, size = count + 1, len(part)
+        else:
+            size += 1 + len(part)
+
+    # Find the cut points that minimize the sum of squared lengths for that count
+    prefix = [0]
+    for part in parts:
+        prefix.append(prefix[-1] + len(part))
+
+    def width(start: int, end: int) -> int:
+        return prefix[end] - prefix[start] + (end - start - 1)
+
+    cost = [[math.inf] * (len(parts) + 1) for _ in range(count + 1)]
+    cut = [[0] * (len(parts) + 1) for _ in range(count + 1)]
+    cost[0][0] = 0.0
+    for pieces in range(1, count + 1):
+        for end in range(pieces, len(parts) + 1):
+            for start in range(pieces - 1, end):
+                if width(start, end) <= limit and cost[pieces - 1][start] < math.inf:
+                    total = cost[pieces - 1][start] + width(start, end) ** 2
+                    if total < cost[pieces][end]:
+                        cost[pieces][end], cut[pieces][end] = total, start
+
+    # Walk the cut points back from the end
+    joined: list[str] = []
+    end = len(parts)
+    for pieces in range(count, 0, -1):
+        start = cut[pieces][end]
+        joined.insert(0, " ".join(parts[start:end]))
+        end = start
+    return joined
+
+
+def plan_chunks(text: str, limit: int = JOB_CHUNK_CHARS) -> list[tuple[str, float]]:
+    r"""Cut text into chunks that follow its paragraphs, with the pause after each.
+
+    Neighboring paragraphs that fit together within ``limit`` share a chunk. A paragraph
+    over the limit is cut at sentence boundaries into the fewest pieces, of about equal
+    length, and a sentence over the limit is cut at a comma or space. The pieces of a cut
+    paragraph are not joined with its neighbors.
+
+    Parameters
+    ----------
+    text : str
+        Text to speak. A blank line or a line that ends a sentence ends a paragraph.
+    limit : int, optional
+        Most characters in one chunk. Default is ``JOB_CHUNK_CHARS``.
+
+    Returns
+    -------
+    list of tuple of (str, float)
+        Each chunk and the seconds of silence to add after it: a paragraph pause where
+        the chunk ends a paragraph, a sentence pause where it ends inside one, and none
+        after the last chunk.
+
+    Examples
+    --------
+    >>> plan_chunks("One.\n\nTwo.", limit=20)
+    [('One. Two.', 0.0)]
+    >>> plan_chunks("One.\n\nTwo.", limit=5)
+    [('One.', 0.8), ('Two.', 0.0)]
+    """
+    # Make one unit per paragraph, or per piece of a paragraph over the limit
+    units: list[tuple[str, bool, bool]] = []
+    for paragraph in _paragraphs(text):
+        if len(paragraph) <= limit:
+            units.append((paragraph, True, True))
+            continue
+        parts = [
+            part for sentence in SENTENCE_END.split(paragraph) for part in _wrap(sentence, limit)
+        ]
+        pieces = _balanced(parts, limit)
+        units += [(piece, index == len(pieces) - 1, False) for index, piece in enumerate(pieces)]
+
+    # Join whole paragraphs that fit together
+    chunks: list[tuple[str, bool, bool]] = []
+    for unit, ends_paragraph, whole in units:
+        if chunks and whole and chunks[-1][2] and len(chunks[-1][0]) + 1 + len(unit) <= limit:
+            chunks[-1] = (f"{chunks[-1][0]} {unit}", True, True)
+        else:
+            chunks.append((unit, ends_paragraph, whole))
+
+    planned = [(chunk, PARAGRAPH_PAUSE if ends else SENTENCE_PAUSE) for chunk, ends, _ in chunks]
+    if planned:
+        planned[-1] = (planned[-1][0], 0.0)
+    return planned
 
 
 def decode_reference(data: bytes) -> np.ndarray:
@@ -959,11 +1072,8 @@ class Supervisor:
             return _error(400, f"the text must have 1 to {MAX_CHAPTERS} chapters with text")
         title = title or re.sub(r"\s+", " ", chapters[0].title)[:40]
         plan: list[list[tuple[str, float]]] = []
-
-        # Treat each line as a paragraph when the text has no blank lines at all
-        by_line = not re.search(r"\n\s*\n", text)
         for chapter in chapters:
-            chunks = split_text(chapter.body, JOB_CHUNK_CHARS, lines_are_paragraphs=by_line)
+            chunks = plan_chunks(chapter.body)
             if speak_titles and chapter.headed:
                 chunks.insert(0, (re.sub(r"\s+", " ", chapter.title)[:60], PARAGRAPH_PAUSE))
             plan.append(chunks)
