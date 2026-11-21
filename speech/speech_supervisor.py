@@ -65,6 +65,12 @@ PEAK_CEILING_DB = -3.5
 CAP_FRAMES = 1499
 MAX_TEXT_CHARS = 60_000
 CHUNK_CHARS = 500
+# A narration job speaks whole paragraphs where it can. Breeze stops at CAP_FRAMES (119.9 s), and
+# measured pace ran from 0.066 to 0.089 s per character, so 1200 characters ends at 107 s at worst
+JOB_CHUNK_CHARS = 1200
+# Sentence ends: a period, question mark or exclamation mark, optionally followed by a closing
+# quote or bracket, then whitespace and a character that is not another dot of a spaced ellipsis
+SENTENCE_END = re.compile(r"(?:(?<=[.!?])|(?<=[.!?][\"'”’)\]]))\s+(?=[^\s.])")
 SENTENCE_PAUSE = 0.3
 PARAGRAPH_PAUSE = 0.8
 SPEAK_ATTEMPTS = 6
@@ -140,11 +146,14 @@ def _wrap(sentence: str, limit: int) -> list[str]:
     return [*parts, sentence] if sentence else parts
 
 
-def split_text(text: str, limit: int = CHUNK_CHARS) -> list[tuple[str, float]]:
+def split_text(
+    text: str, limit: int = CHUNK_CHARS, *, lines_are_paragraphs: bool = False
+) -> list[tuple[str, float]]:
     r"""Cut text into chunks that end at sentence boundaries, with the pause after each.
 
-    Paragraph breaks get a longer pause than sentence breaks, and the last chunk
-    has none.
+    A paragraph that fits the limit is one chunk. A longer paragraph is cut at sentence
+    boundaries, and a sentence over the limit is cut at a comma or space. Paragraph breaks
+    get a longer pause than sentence breaks, and the last chunk has none.
 
     Parameters
     ----------
@@ -152,6 +161,9 @@ def split_text(text: str, limit: int = CHUNK_CHARS) -> list[tuple[str, float]]:
         Text to speak; blank lines separate paragraphs.
     limit : int, optional
         Most characters in one chunk. Default is ``CHUNK_CHARS``.
+    lines_are_paragraphs : bool, optional
+        Whether each line is a paragraph, for text with no blank lines. Default is False,
+        which joins the lines of a paragraph with spaces.
 
     Returns
     -------
@@ -162,14 +174,17 @@ def split_text(text: str, limit: int = CHUNK_CHARS) -> list[tuple[str, float]]:
     --------
     >>> split_text("One. Two.\n\nThree.", limit=9)
     [('One. Two.', 0.8), ('Three.', 0.0)]
+    >>> split_text("One.\nTwo.", lines_are_paragraphs=True)
+    [('One.', 0.8), ('Two.', 0.0)]
     """
     chunks: list[tuple[str, float]] = []
-    for paragraph in re.split(r"\n\s*\n", text):
+    paragraphs = text.splitlines() if lines_are_paragraphs else re.split(r"\n\s*\n", text)
+    for paragraph in paragraphs:
         paragraph = re.sub(r"\s+", " ", paragraph).strip()
         if not paragraph:
             continue
         pieces, current = [], ""
-        for sentence in re.split(r"(?<=[.!?])\s+", paragraph):
+        for sentence in SENTENCE_END.split(paragraph):
             for part in _wrap(sentence, limit):
                 if current and len(current) + 1 + len(part) > limit:
                     pieces.append(current)
@@ -944,8 +959,11 @@ class Supervisor:
             return _error(400, f"the text must have 1 to {MAX_CHAPTERS} chapters with text")
         title = title or re.sub(r"\s+", " ", chapters[0].title)[:40]
         plan: list[list[tuple[str, float]]] = []
+
+        # Treat each line as a paragraph when the text has no blank lines at all
+        by_line = not re.search(r"\n\s*\n", text)
         for chapter in chapters:
-            chunks = split_text(chapter.body)
+            chunks = split_text(chapter.body, JOB_CHUNK_CHARS, lines_are_paragraphs=by_line)
             if speak_titles and chapter.headed:
                 chunks.insert(0, (re.sub(r"\s+", " ", chapter.title)[:60], PARAGRAPH_PAUSE))
             plan.append(chunks)

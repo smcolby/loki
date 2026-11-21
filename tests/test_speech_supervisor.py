@@ -140,6 +140,51 @@ def test_split_text_keeps_every_word():
     assert " ".join(piece for piece, _ in chunks).split() == text.split()
 
 
+@pytest.mark.parametrize(
+    ("text", "limit", "expected"),
+    [
+        (
+            "Alpha beta gamma delta."
+            ' He wrote: "I love to sail forbidden seas . . ."'
+            " To the Greeks the world was small.",
+            66,
+            [
+                "Alpha beta gamma delta.",
+                'He wrote: "I love to sail forbidden seas . . ."',
+                "To the Greeks the world was small.",
+            ],
+        ),
+        ('She said "Go." Then she left.', 20, ['She said "Go."', "Then she left."]),
+        ("Hi there. Wait. . . . Then go.", 20, ["Hi there.", "Wait. . . . Then go."]),
+    ],
+    ids=[
+        "closing quote after a spaced ellipsis",
+        "closing quote after a period",
+        "spaced ellipsis",
+    ],
+)
+def test_split_text_keeps_closing_quotes_and_ellipses_with_their_sentence(text, limit, expected):
+    """A sentence ends after its closing quote, and the dots of a spaced ellipsis stay together."""
+    assert [piece for piece, _ in sup.split_text(text, limit)] == expected
+
+
+def test_split_text_lines_are_paragraphs_only_when_asked():
+    """Text with single newlines is one paragraph by default and one per line on request."""
+    text = "First line.\nSecond line.\nThird."
+
+    assert sup.split_text(text, 100) == [("First line. Second line. Third.", 0.0)]
+    assert sup.split_text(text, 100, lines_are_paragraphs=True) == [
+        ("First line.", sup.PARAGRAPH_PAUSE),
+        ("Second line.", sup.PARAGRAPH_PAUSE),
+        ("Third.", 0.0),
+    ]
+
+
+def test_job_chunk_limit_ends_before_breeze_stops_at_the_slowest_measured_pace():
+    """A chunk of the job limit, spoken at 0.089 s per character, is shorter than Breeze's cap."""
+    assert sup.JOB_CHUNK_CHARS * 0.089 < sup.CAP_FRAMES * 0.08
+
+
 # ---- child process ----
 
 
@@ -751,6 +796,39 @@ async def test_create_job_does_not_read_a_title_nobody_wrote(client, tmp_path):
     assert [chapter["title"] for chapter in job["chapters"]] == ["Paper", "Next"]
     assert [text for text, _ in plan[0]] == ["Opening words here."]
     assert [text for text, _ in plan[1]] == ["Next", "More words here."]
+
+
+async def test_create_job_keeps_a_paragraph_whole_up_to_the_job_limit(client, tmp_path):
+    """A paragraph under the job limit is one chunk, though it is over the generate limit."""
+    sentence = "This sentence has some words in it. "
+    paragraph = sentence * (sup.JOB_CHUNK_CHARS // len(sentence))
+    assert sup.CHUNK_CHARS < len(paragraph) <= sup.JOB_CHUNK_CHARS
+
+    _, job = await create_job(client, f"{paragraph}\n\n{paragraph}", speak_titles=False)
+
+    plan = narration.JobStore(tmp_path / "data").plan(job["id"])
+    assert [(len(text), pause) for text, pause in plan[0]] == [
+        (len(paragraph.strip()), sup.PARAGRAPH_PAUSE),
+        (len(paragraph.strip()), 0.0),
+    ]
+
+
+async def test_create_job_reads_each_line_as_a_paragraph_when_there_are_no_blank_lines(
+    client, tmp_path
+):
+    """Text with only single newlines gets a paragraph pause after each line."""
+    _, job = await create_job(client, "First line.\nSecond line.", speak_titles=False)
+
+    plan = narration.JobStore(tmp_path / "data").plan(job["id"])
+    assert plan[0] == [("First line.", sup.PARAGRAPH_PAUSE), ("Second line.", 0.0)]
+
+
+async def test_create_job_joins_the_lines_of_a_paragraph_when_blank_lines_exist(client, tmp_path):
+    """In wrapped text with blank lines between paragraphs, a single newline is a space."""
+    _, job = await create_job(client, "One wrapped\nline.\n\nNext one.", speak_titles=False)
+
+    plan = narration.JobStore(tmp_path / "data").plan(job["id"])
+    assert plan[0] == [("One wrapped line.", sup.PARAGRAPH_PAUSE), ("Next one.", 0.0)]
 
 
 async def test_create_job_titles_itself_after_the_first_chapter(client):
