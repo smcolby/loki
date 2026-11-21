@@ -286,7 +286,7 @@ In the Studio:
 
 - **Generate** accepts text, an optional saved voice, an optional instruction, its strength (1 to 6; a value above 1 needs an instruction), and a seed. Without a saved voice, Breeze invents a different voice for each chunk, so choose or save a voice before narrating long text.
 - **Voices** saves a voice from a clean recording of 3 to 30 seconds and its exact transcript, including repeated words. Any audio file the browser can play works; the page converts it to 24 kHz mono before uploading. After generating a short sample (about two sentences) from an instruction, **Save voice** stores the sample as a voice, which makes the designed voice identical across later requests.
-- **Library** lists saved audio with its settings, and downloads it as WAV (the master), M4A (AAC at 128 kbps), or MP3 (128 kbps). The M4A and MP3 copies are levelled to -20 dB RMS with peaks under -3 dB, the limits ACX publishes for audiobooks, at 44.1 kHz with title tags.
+- **Library** lists saved audio with its settings, and downloads it as WAV (the master), M4A (AAC at 128 kbps), or MP3 (128 kbps). The M4A and MP3 copies are leveled to -20 dB RMS with peaks under -3 dB, the limits ACX publishes for audiobooks, at 44.1 kHz with title tags.
 
 Breeze serves one request at a time. The Studio has no sign-in, like the rest of the LAN-facing stack, and refuses changes without the Studio's request header, which a page on another site cannot add. Clone only voices you have the right to use.
 
