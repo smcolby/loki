@@ -25,9 +25,11 @@ import signal
 import sys
 import time
 import wave
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import quote
 
 import av
 import numpy as np
@@ -377,7 +379,14 @@ def export_gain_db(source: Path) -> float:
     return min(TARGET_RMS_DB - rms_db, PEAK_CEILING_DB - peak_db)
 
 
-def encode_audio(source: Path, target: Path, fmt: str, title: str) -> None:
+def encode_audio(
+    source: Path,
+    target: Path,
+    fmt: str,
+    title: str,
+    album: str = "loki",
+    track: tuple[int, int] | None = None,
+) -> None:
     """Encode a 24 kHz mono WAV file as AAC (``m4a``) or MP3 at 44.1 kHz, with tags.
 
     AAC uses 128 kbps, the top tier of Audible's own files, and MP3 uses 128 kbps.
@@ -395,6 +404,10 @@ def encode_audio(source: Path, target: Path, fmt: str, title: str) -> None:
         ``"m4a"`` or ``"mp3"``.
     title : str
         Title tag.
+    album : str, optional
+        Album tag; a job's chapters share the job title so a player groups them.
+    track : tuple of int, optional
+        Chapter number and chapter count, written as the track tag so a player orders them.
 
     Raises
     ------
@@ -407,9 +420,10 @@ def encode_audio(source: Path, target: Path, fmt: str, title: str) -> None:
     rate = 44100
     partial = target.with_name(target.name + ".part")
     output = av.open(str(partial), "w", format=container)
-    output.metadata.update(
-        {"title": title, "artist": "Breeze TTS 2 (synthetic speech)", "album": "loki"}
-    )
+    tags = {"title": title, "artist": "Breeze TTS 2 (synthetic speech)", "album": album}
+    if track:
+        tags["track"] = f"{track[0]}/{track[1]}"
+    output.metadata.update(tags)
     stream = cast(AudioStream, output.add_stream(codec, rate=rate))
     stream.bit_rate = 128_000
     stream.layout = "mono"
@@ -439,6 +453,50 @@ def encode_audio(source: Path, target: Path, fmt: str, title: str) -> None:
     partial.replace(target)
 
 
+def zip_member_name(number: int, width: int, title: str, extension: str) -> str:
+    """Return a safe filename for a chapter in a zip: its number, then its title.
+
+    Parameters
+    ----------
+    number : int
+        Chapter number, counted from 1.
+    width : int
+        Digits to pad the number to, so the files sort in chapter order.
+    title : str
+        Chapter title; characters that file systems reject are replaced with spaces.
+    extension : str
+        File extension without the dot.
+
+    Examples
+    --------
+    >>> zip_member_name(3, 2, 'Why: a "test"?', "m4a")
+    '03 Why a test.m4a'
+    """
+    clean = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', " ", title)
+    clean = re.sub(r"\s+", " ", clean).strip(" .")[:100] or "Chapter"
+    return f"{number:0{width}d} {clean}.{extension}"
+
+
+def write_zip(path: Path, members: list[tuple[Path, str]], missing: list[str]) -> None:
+    """Write audio files into a zip without compressing them, and list unfinished chapters.
+
+    Parameters
+    ----------
+    path : Path
+        Zip file to write.
+    members : list of tuple
+        Each source file with its filename inside the zip.
+    missing : list of str
+        Chapters that have no audio yet; they are listed in ``MISSING.txt`` when any.
+    """
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as archive:
+        for source, arcname in members:
+            archive.write(source, arcname)
+        if missing:
+            listing = "These chapters have no audio yet:\n" + "\n".join(missing) + "\n"
+            archive.writestr("MISSING.txt", listing)
+
+
 class Library:
     """Saved voices and generated audio under one data directory.
 
@@ -457,6 +515,12 @@ class Library:
         self.outputs_dir = root / "outputs"
         self.voices_dir.mkdir(parents=True, exist_ok=True)
         self.outputs_dir.mkdir(parents=True, exist_ok=True)
+
+        # Clear zip files left by a download that was cut off by a restart
+        self.tmp_dir = root / "tmp"
+        self.tmp_dir.mkdir(exist_ok=True)
+        for stale in self.tmp_dir.iterdir():
+            stale.unlink(missing_ok=True)
 
     def voice(self, voice_id: str) -> dict[str, Any] | None:
         """Return a voice's metadata, or None for an unknown or malformed id."""
@@ -674,6 +738,7 @@ class Supervisor:
         self.progress: dict[str, Any] = {}
         self.jobs = JobStore(library.root)
         self.running: dict[str, Any] | None = None
+        self.encoding: dict[str, asyncio.Lock] = {}
         self.jobs.interrupt_running()
 
     def routes(self) -> list[web.RouteDef]:
@@ -697,6 +762,7 @@ class Supervisor:
             web.post("/api/import", self.import_file),
             web.post("/api/jobs", self.create_job),
             web.get("/api/jobs/{job_id}", self.get_job),
+            web.get("/api/jobs/{job_id}/zip", self.job_zip),
             web.delete("/api/jobs/{job_id}", self.delete_job),
             web.post("/api/jobs/{job_id}/start", self.start_job),
             web.post("/api/jobs/{job_id}/stop", self.stop_job),
@@ -821,13 +887,10 @@ class Supervisor:
         if meta is None or fmt not in AUDIO_FORMATS:
             return _error(404, "no such output or format")
         content_type, extension = AUDIO_FORMATS[fmt]
-        source = self.library.outputs_dir / f"{output_id}.wav"
-        target = self.library.outputs_dir / f"{output_id}.{extension}"
-        if not target.exists():
-            try:
-                await asyncio.to_thread(encode_audio, source, target, fmt, meta["title"])
-            except (ValueError, OSError, FFmpegError) as exc:
-                return _error(500, f"encoding failed: {exc}")
+        try:
+            target = await self._ensure_audio(output_id, meta, fmt)
+        except (ValueError, OSError, FFmpegError) as exc:
+            return _error(500, f"encoding failed: {exc}")
         slug = re.sub(r"[^a-z0-9]+", "-", meta["title"].lower()).strip("-")[:120] or "narration"
         return web.FileResponse(
             target,
@@ -836,6 +899,85 @@ class Supervisor:
                 "Content-Disposition": f'inline; filename="{slug}.{extension}"',
             },
         )
+
+    async def _ensure_audio(self, output_id: str, meta: dict[str, Any], fmt: str) -> Path:
+        """Return the file for an output in a format, encoding it first when no copy exists.
+
+        Two requests for the same copy wait for one encode, so they do not write the same
+        partial file. A chapter of a job has its job title as the album and its number
+        as the track.
+
+        Raises
+        ------
+        ValueError
+            If ``fmt`` cannot be encoded.
+        OSError
+            If the copy cannot be written.
+        FFmpegError
+            If encoding fails.
+        """
+        source = self.library.outputs_dir / f"{output_id}.wav"
+        target = self.library.outputs_dir / f"{output_id}.{AUDIO_FORMATS[fmt][1]}"
+        async with self.encoding.setdefault(output_id, asyncio.Lock()):
+            if not target.exists():
+                track = (meta["track"], meta["tracks"]) if "track" in meta else None
+                album = meta.get("album", "loki")
+                await asyncio.to_thread(
+                    encode_audio, source, target, fmt, meta["title"], album, track
+                )
+        return target
+
+    async def job_zip(self, request: web.Request) -> web.StreamResponse:
+        """Download a job's finished chapters as one zip with a numbered file per chapter.
+
+        The format is ``m4a`` (the default), ``mp3`` or ``wav``. Chapters without audio are
+        listed in ``MISSING.txt`` inside the zip. The zip is built in a temporary file and
+        removed after it is sent.
+        """
+        job = self.jobs.job(request.match_info["job_id"])
+        fmt = request.query.get("format", "m4a")
+        if job is None or fmt not in AUDIO_FORMATS:
+            return _error(404, "no such job or format")
+        extension = AUDIO_FORMATS[fmt][1]
+        width = max(2, len(str(len(job["chapters"]))))
+        members: list[tuple[Path, str]] = []
+        missing: list[str] = []
+        for number, chapter in enumerate(job["chapters"], start=1):
+            meta = self.library.output(chapter["output_id"]) if chapter["output_id"] else None
+            if meta is None:
+                missing.append(f"{number:0{width}d} {chapter['title']}")
+                continue
+            try:
+                path = await self._ensure_audio(chapter["output_id"], meta, fmt)
+            except (ValueError, OSError, FFmpegError) as exc:
+                return _error(500, f"encoding failed: {exc}")
+            members.append((path, zip_member_name(number, width, chapter["title"], extension)))
+        if not members:
+            return _error(409, "no chapter of this job is finished yet")
+
+        # Build the zip in a temporary file, send it in blocks, and remove it afterward
+        archive = self.library.tmp_dir / f"{secrets.token_hex(8)}.zip"
+        slug = re.sub(r"[^a-z0-9]+", "-", job["title"].lower()).strip("-")[:120] or "narration"
+        try:
+            await asyncio.to_thread(write_zip, archive, members, missing)
+            response = web.StreamResponse(
+                headers={
+                    "Content-Type": "application/zip",
+                    "Content-Length": str(archive.stat().st_size),
+                    "Content-Disposition": (
+                        f'attachment; filename="{slug}.zip"; '
+                        f"filename*=UTF-8''{quote(job['title'])}.zip"
+                    ),
+                }
+            )
+            await response.prepare(request)
+            with archive.open("rb") as stream:
+                while block := await asyncio.to_thread(stream.read, 1 << 20):
+                    await response.write(block)
+            await response.write_eof()
+            return response
+        finally:
+            archive.unlink(missing_ok=True)
 
     def _settings(self, form: Any) -> dict[str, Any]:
         """Check the instruction, guidance, and seed fields that voices and generation share.
@@ -1288,6 +1430,9 @@ class Supervisor:
                 "warnings": chapter["warnings"],
                 "job_id": job["id"],
                 "chapter": number + 1,
+                "album": job["title"],
+                "track": number + 1,
+                "tracks": len(job["chapters"]),
             },
         )
         return output_id

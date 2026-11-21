@@ -7,8 +7,10 @@ import socket
 import sys
 import time
 import wave
+import zipfile
 from pathlib import Path
 
+import av
 import narration
 import numpy as np
 import pytest
@@ -1188,6 +1190,81 @@ async def test_unknown_jobs_are_not_found(client):
     assert (await start_job(client, unknown)).status == 404
     assert (await client.post(f"/api/jobs/{unknown}/stop", headers=STUDIO)).status == 409
     assert (await client.delete(f"/api/jobs/{unknown}", headers=STUDIO)).status == 404
+
+
+def test_zip_member_name_numbers_the_chapter_and_removes_characters_files_reject():
+    """The filename is the padded number and a title without path or reserved characters."""
+    assert sup.zip_member_name(3, 2, 'Why: a "test"?', "m4a") == "03 Why a test.m4a"
+    assert sup.zip_member_name(7, 3, "a/b\\c", "mp3") == "007 a b c.mp3"
+    assert sup.zip_member_name(1, 2, "...", "wav") == "01 Chapter.wav"
+    assert len(sup.zip_member_name(1, 2, "x" * 500, "wav")) < 120
+
+
+async def finished_job(client, breeze_env) -> dict:
+    """Run a two-chapter job to completion and return its record."""
+    _, job = await create_job(client, title="My book")
+    await start_job(client, job["id"])
+    return await wait_for_state(client, job["id"], ("done", "failed"))
+
+
+async def test_a_zip_holds_each_finished_chapter_in_order_with_album_and_track_tags(
+    client, breeze_env, paced, tmp_path
+):
+    """The zip has one numbered file per chapter, tagged so a player groups and orders them."""
+    done = await finished_job(client, breeze_env)
+
+    response = await client.get(f"/api/jobs/{done['id']}/zip?format=m4a")
+
+    assert response.status == 200
+    assert response.headers["Content-Type"] == "application/zip"
+    assert 'filename="my-book.zip"' in response.headers["Content-Disposition"]
+    archive = zipfile.ZipFile(io.BytesIO(await response.read()))
+    assert archive.namelist() == ["01 Chapter One.m4a", "02 Chapter Two.m4a"]
+    assert all(info.compress_type == zipfile.ZIP_STORED for info in archive.infolist())
+    tagged = tmp_path / "chapter.m4a"
+    tagged.write_bytes(archive.read("02 Chapter Two.m4a"))
+    with av.open(str(tagged)) as container:
+        assert container.metadata["album"] == "My book"
+        assert container.metadata["track"] == "2/2"
+
+    # The handler removes the temporary zip as it returns, just after the client has the last byte
+    leftover = tmp_path / "data" / "tmp"
+    for _ in range(40):
+        if not list(leftover.iterdir()):
+            break
+        await asyncio.sleep(0.05)
+    assert not list(leftover.iterdir())
+
+
+async def test_a_zip_lists_chapters_that_have_no_audio(client, breeze_env, paced):
+    """A chapter whose output was deleted is left out and listed in MISSING.txt."""
+    done = await finished_job(client, breeze_env)
+    await client.delete(f"/api/outputs/{done['chapters'][1]['output_id']}", headers=STUDIO)
+
+    response = await client.get(f"/api/jobs/{done['id']}/zip?format=wav")
+
+    archive = zipfile.ZipFile(io.BytesIO(await response.read()))
+    assert archive.namelist() == ["01 Chapter One.wav", "MISSING.txt"]
+    assert "02 Chapter Two" in archive.read("MISSING.txt").decode()
+
+
+async def test_a_zip_is_refused_for_a_job_with_no_finished_chapter_or_a_bad_request(client):
+    """A new job has nothing to zip (409), and an unknown job or format is a 404."""
+    _, job = await create_job(client)
+
+    assert (await client.get(f"/api/jobs/{job['id']}/zip")).status == 409
+    assert (await client.get(f"/api/jobs/{job['id']}/zip?format=ogg")).status == 404
+    assert (await client.get(f"/api/jobs/{'0' * 32}/zip")).status == 404
+
+
+async def test_the_library_clears_temporary_zip_files_left_by_a_restart(tmp_path):
+    """A zip a cut-off download left behind is removed when the library opens."""
+    (tmp_path / "tmp").mkdir()
+    (tmp_path / "tmp" / "left.zip").write_bytes(b"PK")
+
+    sup.Library(tmp_path)
+
+    assert list((tmp_path / "tmp").iterdir()) == []
 
 
 async def test_deleting_a_job_removes_its_files_but_not_its_finished_chapters(
