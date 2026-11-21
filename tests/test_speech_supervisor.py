@@ -1,5 +1,6 @@
 """Tests for speech/speech_supervisor.py: starting Breeze, the voice library, and generation."""
 
+import asyncio
 import io
 import json
 import socket
@@ -8,6 +9,7 @@ import time
 import wave
 from pathlib import Path
 
+import narration
 import numpy as np
 import pytest
 import soundfile as sf
@@ -251,9 +253,10 @@ async def test_unload_stops_breeze_and_is_refused_while_busy(client, child):
     assert await (await client.get("/health")).json() == {"status": "ok", "loaded": False}
 
 
-async def test_changes_without_the_studio_header_are_refused(client):
+@pytest.mark.parametrize("path", ["/api/generate", "/api/jobs", f"/api/jobs/{'0' * 32}/start"])
+async def test_changes_without_the_studio_header_are_refused(client, path):
     """A cross-site form post cannot add the header, so changes without it get 403."""
-    response = await client.post("/api/generate", data=speak_form("Hello there."))
+    response = await client.post(path, data=speak_form("Hello there."))
 
     assert response.status == 403
 
@@ -661,3 +664,331 @@ def test_encoded_copies_meet_the_acx_levels(tmp_path, fmt):
 
     assert rms_db == pytest.approx(-20.0, abs=0.7)
     assert peak_db < -3.0
+
+
+# ---- narration jobs ----
+
+BOOK = "# Chapter One\n\nFirst chapter words here.\n\n# Chapter Two\n\nSecond chapter words here."
+PLAIN = "Plain words long enough to pass."
+
+
+async def create_job(client, text: str = BOOK, **fields) -> tuple[int, dict]:
+    """Post a narration job and return the status and the response body."""
+    response = await client.post("/api/jobs", json={"text": text, **fields}, headers=STUDIO)
+    return response.status, await response.json()
+
+
+async def start_job(client, job_id: str):
+    """Ask the supervisor to start or resume a job."""
+    return await client.post(f"/api/jobs/{job_id}/start", headers=STUDIO)
+
+
+async def wait_for_state(client, job_id: str, states: tuple[str, ...]) -> dict:
+    """Poll a job until its state is one of ``states``, and return its record."""
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        job = await (await client.get(f"/api/jobs/{job_id}")).json()
+        if job["state"] in states:
+            return job
+        await asyncio.sleep(0.05)
+    raise AssertionError(f"job did not reach {states}: {job['state']}")
+
+
+async def wait_for_requests(log: Path, count: int) -> None:
+    """Wait until the fake Breeze has logged ``count`` requests."""
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        if log.exists() and len(logged(log)) >= count:
+            return
+        await asyncio.sleep(0.05)
+    raise AssertionError(f"fake Breeze saw fewer than {count} requests")
+
+
+@pytest.fixture
+def gate(monkeypatch, tmp_path) -> Path:
+    """A file that, until it exists, holds every fake Breeze response before its last block."""
+    path = tmp_path / "gate"
+    monkeypatch.setenv("FAKE_GATE", str(path))
+    return path
+
+
+@pytest.fixture
+def paced(monkeypatch):
+    """Make the fake Breeze speak at the pace the quality check expects."""
+    monkeypatch.setenv("FAKE_PER_CHAR", str(narration.SECONDS_PER_CHAR))
+
+
+async def test_create_job_splits_chapters_and_reads_each_heading_first(client, tmp_path):
+    """A heading starts a chapter, and its title is the first chunk spoken in it."""
+    status, job = await create_job(client, title="My book")
+
+    assert status == 201
+    assert job["state"] == "ready"
+    assert [chapter["title"] for chapter in job["chapters"]] == ["Chapter One", "Chapter Two"]
+    assert [chapter["chunks_total"] for chapter in job["chapters"]] == [2, 2]
+    plan = narration.JobStore(tmp_path / "data").plan(job["id"])
+    assert plan[0] == [("Chapter One", sup.PARAGRAPH_PAUSE), ("First chapter words here.", 0.0)]
+    listed = await (await client.get("/api/jobs")).json()
+    assert [entry["id"] for entry in listed["jobs"]] == [job["id"]]
+
+
+async def test_create_job_can_leave_headings_unspoken(client, tmp_path):
+    """With speak_titles off, chapters hold only their text."""
+    _, job = await create_job(client, speak_titles=False)
+
+    plan = narration.JobStore(tmp_path / "data").plan(job["id"])
+    assert [len(chunks) for chunks in plan] == [1, 1]
+    assert job["chunks_total"] == 2
+
+
+async def test_create_job_does_not_read_a_title_nobody_wrote(client, tmp_path):
+    """Text before the first heading is a chapter named for the job, and is not announced."""
+    _, job = await create_job(
+        client, "Opening words here.\n# Next\nMore words here.", title="Paper"
+    )
+
+    plan = narration.JobStore(tmp_path / "data").plan(job["id"])
+    assert [chapter["title"] for chapter in job["chapters"]] == ["Paper", "Next"]
+    assert [text for text, _ in plan[0]] == ["Opening words here."]
+    assert [text for text, _ in plan[1]] == ["Next", "More words here."]
+
+
+async def test_create_job_titles_itself_after_the_first_chapter(client):
+    """Without a title, the first chapter's title names the job, cut to 40 characters."""
+    _, job = await create_job(client, "# " + "Long title " * 10 + "\nBody words here.")
+
+    assert 0 < len(job["title"]) <= 40
+
+
+@pytest.mark.parametrize(
+    ("fields", "message"),
+    [
+        ({"text": ""}, "send 1 to"),
+        ({"text": "# Heading only"}, "chapters"),
+        ({"text": "x", "voice_id": "0" * 32}, "unknown voice_id"),
+        ({"text": "x", "cfg_scale": 4}, "needs an instruction"),
+        ({"text": "x", "speak_titles": "no"}, "speak_titles"),
+    ],
+)
+async def test_create_job_rejects_bad_requests(client, fields, message):
+    """Empty text, no chapter text, a missing voice, and bad settings are refused with 400."""
+    response = await client.post("/api/jobs", json=fields, headers=STUDIO)
+
+    assert response.status == 400
+    assert message in (await response.json())["error"]["message"]
+
+
+async def test_create_job_rejects_a_body_that_is_not_json(client):
+    """A form post to /api/jobs gets 400 instead of an error page."""
+    response = await client.post("/api/jobs", data="not json", headers=STUDIO)
+
+    assert response.status == 400
+
+
+async def test_a_job_speaks_every_chapter_into_a_library_output(
+    client, breeze_env, paced, tmp_path
+):
+    """Each chapter becomes one output of its text's length plus pauses, and chunks are cleared."""
+    _, job = await create_job(client, title="My book")
+
+    started = await start_job(client, job["id"])
+    done = await wait_for_state(client, job["id"], ("done", "failed"))
+
+    assert started.status == 202
+    assert done["state"] == "done"
+    assert (done["chunks_done"], done["chars_done"]) == (4, done["chars_total"])
+    outputs = (await (await client.get("/api/outputs")).json())["outputs"]
+    by_title = {output["title"]: output for output in outputs}
+    assert sorted(by_title) == ["My book - 01 Chapter One", "My book - 02 Chapter Two"]
+    # 11 characters, a 0.8 s pause, then 25 characters at 0.075 s each
+    assert by_title["My book - 01 Chapter One"]["duration_s"] == pytest.approx(3.5, abs=0.06)
+    assert done["chapters"][0]["output_id"] == by_title["My book - 01 Chapter One"]["id"]
+    assert [entry["seed"] for entry in logged(breeze_env)] == ["42", "43", "42", "43"]
+    assert not list((tmp_path / "data" / "jobs" / job["id"] / "chunks").iterdir())
+    exported = await client.get(
+        f"/api/outputs/{by_title['My book - 01 Chapter One']['id']}/audio?format=m4a"
+    )
+    assert exported.status == 200
+
+
+async def test_a_job_clones_every_chunk_from_its_voice_and_instruction(client, breeze_env, paced):
+    """The voice clip and the instruction go with every chunk's request."""
+    voice = await (await client.post("/api/voices", data=voice_form(), headers=STUDIO)).json()
+    _, job = await create_job(
+        client, voice_id=voice["id"], instruction="Calm.", cfg_scale=4, seed=9
+    )
+
+    await start_job(client, job["id"])
+    await wait_for_state(client, job["id"], ("done", "failed"))
+
+    requests = logged(breeze_env)
+    assert len(requests) == 4
+    assert {request["ref_text"] for request in requests} == {voice["ref_text"]}
+    assert all(request["ref_audio_bytes"] > 0 for request in requests)
+    assert {(request["instruction"], request["cfg_scale"]) for request in requests} == {
+        ("Calm.", "4.0")
+    }
+
+
+async def test_a_job_resumes_after_the_chunks_already_saved(client, breeze_env, paced, tmp_path):
+    """Chunks on disk are not spoken again, and their audio is part of the chapter."""
+    _, job = await create_job(client)
+    first_title = np.frombuffer(bytes(19800 * 2), dtype=np.int16)
+    store = narration.JobStore(tmp_path / "data")
+    store.write_chunk(job["id"], 0, 0, (first_title + 3000).tobytes())
+
+    await start_job(client, job["id"])
+    done = await wait_for_state(client, job["id"], ("done", "failed"))
+
+    assert done["state"] == "done"
+    assert [entry["text"] for entry in logged(breeze_env)] == [
+        "First chapter words here.",
+        "Chapter Two",
+        "Second chapter words here.",
+    ]
+    outputs = (await (await client.get("/api/outputs")).json())["outputs"]
+    first = next(output for output in outputs if output["chapter"] == 1)
+    assert first["duration_s"] == pytest.approx(3.5, abs=0.06)
+
+
+async def test_a_chunk_that_fails_the_check_is_spoken_again_with_a_new_seed(
+    client, breeze_env, paced, monkeypatch
+):
+    """A clip far shorter than its text is replaced by a second attempt with another seed."""
+    monkeypatch.setenv("FAKE_SHORT_FIRST", "1")
+    _, job = await create_job(client, PLAIN)
+
+    await start_job(client, job["id"])
+    done = await wait_for_state(client, job["id"], ("done", "failed"))
+
+    assert done["state"] == "done"
+    assert [entry["seed"] for entry in logged(breeze_env)] == ["42", str(42 + sup.RETRY_SEED_STEP)]
+    assert done["chapters"][0]["warnings"] == []
+
+
+async def test_a_chunk_that_never_passes_is_used_with_a_warning(
+    client, breeze_env, paced, monkeypatch
+):
+    """After three attempts the closest clip is used, and the chapter records why."""
+    monkeypatch.setenv("FAKE_SHORT_FIRST", "9")
+    _, job = await create_job(client, PLAIN)
+
+    await start_job(client, job["id"])
+    done = await wait_for_state(client, job["id"], ("done", "failed"))
+
+    assert done["state"] == "done"
+    assert len(logged(breeze_env)) == sup.JOB_ATTEMPTS
+    (warning,) = done["chapters"][0]["warnings"]
+    assert "too short" in warning
+    assert f"all {sup.JOB_ATTEMPTS} attempts" in warning
+
+
+async def test_a_job_fails_with_the_error_when_breeze_keeps_failing(
+    client, breeze_env, monkeypatch
+):
+    """Three failed attempts at one chunk end the job as failed, with the saved chunks intact."""
+    monkeypatch.setenv("FAKE_FAIL", "1")
+    _, job = await create_job(client, PLAIN)
+
+    await start_job(client, job["id"])
+    failed = await wait_for_state(client, job["id"], ("done", "failed"))
+
+    assert failed["state"] == "failed"
+    assert f"Breeze failed {sup.JOB_ATTEMPTS} times" in failed["error"]
+    assert failed["chapters"][0]["state"] == "pending"
+    status = await (await client.get("/api/status")).json()
+    assert status["job"] == ""
+
+
+async def test_stop_pauses_a_job_and_start_resumes_it(client, breeze_env, paced, gate):
+    """Stopping discards the part in progress and frees Breeze; starting again finishes the job."""
+    _, job = await create_job(client)
+    await start_job(client, job["id"])
+    await wait_for_requests(breeze_env, 1)
+
+    stopped = await client.post(f"/api/jobs/{job['id']}/stop", headers=STUDIO)
+    status = await (await client.get("/api/status")).json()
+
+    assert (await stopped.json())["state"] == "paused"
+    assert (status["job"], status["generating"]) == ("", False)
+    gate.write_text("open")
+    await start_job(client, job["id"])
+    done = await wait_for_state(client, job["id"], ("done", "failed"))
+    assert done["state"] == "done"
+    assert done["chunks_done"] == 4
+
+
+async def test_a_running_job_refuses_other_generation_unload_and_deletion(
+    client, breeze_env, paced, gate
+):
+    """While a job runs, a second job, a Studio generation, an unload, and a delete get 409."""
+    _, job = await create_job(client)
+    _, other = await create_job(client, PLAIN)
+    await start_job(client, job["id"])
+    await wait_for_requests(breeze_env, 1)
+
+    second = await start_job(client, other["id"])
+    generation, *_ = await generate(client, "Hello there.")
+    unload = await client.post("/unload", json={})
+    deletion = await client.delete(f"/api/jobs/{job['id']}", headers=STUDIO)
+
+    assert (second.status, generation, unload.status, deletion.status) == (409, 409, 409, 409)
+    await client.post(f"/api/jobs/{job['id']}/stop", headers=STUDIO)
+    assert (await client.post("/unload", json={})).status == 200
+
+
+async def test_a_job_left_running_by_a_restart_comes_back_interrupted(make_client):
+    """A supervisor that starts and finds a running job marks it interrupted so it can resume."""
+    first = await make_client()
+    _, job = await create_job(first)
+    on_disk = {**job, "state": "running"}
+    narration.JobStore(Path(first.app["library"].root)).save(on_disk)
+
+    second = await make_client()
+    after = await (await second.get(f"/api/jobs/{job['id']}")).json()
+
+    assert after["state"] == "interrupted"
+
+
+async def test_start_refuses_a_finished_job_and_one_whose_voice_was_deleted(
+    client, breeze_env, paced
+):
+    """A finished job and a job whose voice is gone cannot be started."""
+    voice = await (await client.post("/api/voices", data=voice_form(), headers=STUDIO)).json()
+    _, voiced = await create_job(client, PLAIN, voice_id=voice["id"])
+    _, plain = await create_job(client, PLAIN)
+    await start_job(client, plain["id"])
+    await wait_for_state(client, plain["id"], ("done", "failed"))
+
+    await client.delete(f"/api/voices/{voice['id']}", headers=STUDIO)
+    finished = await start_job(client, plain["id"])
+    orphaned = await start_job(client, voiced["id"])
+
+    assert (finished.status, orphaned.status) == (409, 409)
+    assert "voice" in (await orphaned.json())["error"]["message"]
+
+
+async def test_unknown_jobs_are_not_found(client):
+    """Reading, starting, stopping, or deleting a job that does not exist is a 404 or 409."""
+    unknown = "0" * 32
+
+    assert (await client.get(f"/api/jobs/{unknown}")).status == 404
+    assert (await client.get("/api/jobs/not-an-id")).status == 404
+    assert (await start_job(client, unknown)).status == 404
+    assert (await client.post(f"/api/jobs/{unknown}/stop", headers=STUDIO)).status == 409
+    assert (await client.delete(f"/api/jobs/{unknown}", headers=STUDIO)).status == 404
+
+
+async def test_deleting_a_job_removes_its_files_but_not_its_finished_chapters(
+    client, breeze_env, paced, tmp_path
+):
+    """Chapter outputs stay in the library after their job is deleted."""
+    _, job = await create_job(client, PLAIN)
+    await start_job(client, job["id"])
+    await wait_for_state(client, job["id"], ("done", "failed"))
+
+    deleted = await client.delete(f"/api/jobs/{job['id']}", headers=STUDIO)
+
+    assert deleted.status == 200
+    assert not (tmp_path / "data" / "jobs" / job["id"]).exists()
+    assert len((await (await client.get("/api/outputs")).json())["outputs"]) == 1

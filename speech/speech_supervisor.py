@@ -14,8 +14,8 @@ is made, and saves the result to the library with its settings.
 
 import asyncio
 import contextlib
+import hashlib
 import io
-import json
 import logging
 import math
 import os
@@ -36,6 +36,19 @@ import soxr
 from aiohttp import ClientError, ClientSession, ClientTimeout, FormData, web
 from av.audio.stream import AudioStream
 from av.error import FFmpegError
+from narration import (
+    ID_PATTERN,
+    MAX_CHAPTERS,
+    MAX_JOB_CHARS,
+    SAMPLE_RATE,
+    JobStore,
+    check_chunk,
+    length_error,
+    new_job,
+    read_json,
+    split_chapters,
+    write_json,
+)
 
 log = logging.getLogger("speech")
 
@@ -44,7 +57,6 @@ CHILD_PORT = 8081
 START_TIMEOUT = 600.0
 OWNED_FLAGS = ("--host", "--port")
 MODEL_ID = "breeze-tts-2"
-SAMPLE_RATE = 24000
 FRAME_BYTES = 1920 * 2
 # Export levels from ACX's audiobook requirements: RMS between -23 and -18 dB, peaks under -3 dB.
 # The ceiling is 0.5 dB lower than the limit because AAC and MP3 encoding can overshoot a peak.
@@ -59,12 +71,15 @@ SPEAK_ATTEMPTS = 6
 REFERENCE_SECONDS = (3.0, 30.0)
 # Breeze's README uses 4; the Studio slider stops at 6 because higher values are untested
 MAX_CFG_SCALE = 6.0
+# A narration job speaks a chunk again with a new seed when it fails the quality check
+JOB_ATTEMPTS = 3
+RETRY_SEED_STEP = 7919
+SEED_MODULUS = 2**31 - 1
 AUDIO_FORMATS = {
     "wav": ("audio/wav", "wav"),
     "m4a": ("audio/mp4", "m4a"),
     "mp3": ("audio/mpeg", "mp3"),
 }
-ID_PATTERN = re.compile(r"[0-9a-f]{32}")
 STUDIO_HEADER = "X-Loki-Studio"
 STUDIO_PAGE = Path(__file__).parent / "studio" / "index.html"
 
@@ -294,22 +309,6 @@ def encode_audio(source: Path, target: Path, fmt: str, title: str) -> None:
     partial.replace(target)
 
 
-def _json_write(path: Path, data: dict[str, Any]) -> None:
-    """Write JSON beside its final path, then rename it into place so readers see all or none."""
-    partial = path.with_name(path.name + ".part")
-    partial.write_text(json.dumps(data, indent=1))
-    partial.replace(path)
-
-
-def _json_read(path: Path) -> dict[str, Any] | None:
-    """Return the JSON object stored at ``path``, or None when it is missing or unreadable."""
-    try:
-        data = json.loads(path.read_text())
-    except (OSError, ValueError):
-        return None
-    return data if isinstance(data, dict) else None
-
-
 class Library:
     """Saved voices and generated audio under one data directory.
 
@@ -323,6 +322,7 @@ class Library:
     """
 
     def __init__(self, root: Path):
+        self.root = root
         self.voices_dir = root / "voices"
         self.outputs_dir = root / "outputs"
         self.voices_dir.mkdir(parents=True, exist_ok=True)
@@ -332,11 +332,11 @@ class Library:
         """Return a voice's metadata, or None for an unknown or malformed id."""
         if not ID_PATTERN.fullmatch(voice_id):
             return None
-        return _json_read(self.voices_dir / voice_id / "meta.json")
+        return read_json(self.voices_dir / voice_id / "meta.json")
 
     def voices(self) -> list[dict[str, Any]]:
         """Return every voice, newest first."""
-        found = [_json_read(path / "meta.json") for path in self.voices_dir.iterdir()]
+        found = [read_json(path / "meta.json") for path in self.voices_dir.iterdir()]
         return sorted(
             (meta for meta in found if meta), key=lambda meta: meta["created"], reverse=True
         )
@@ -373,7 +373,7 @@ class Library:
             "created": time.time(),
             **settings,
         }
-        _json_write(folder / "meta.json", meta)
+        write_json(folder / "meta.json", meta)
         return meta
 
     def delete_voice(self, voice_id: str) -> bool:
@@ -389,11 +389,11 @@ class Library:
         """Return a saved output's metadata, or None for an unknown or malformed id."""
         if not ID_PATTERN.fullmatch(output_id):
             return None
-        return _json_read(self.outputs_dir / f"{output_id}.json")
+        return read_json(self.outputs_dir / f"{output_id}.json")
 
     def outputs(self) -> list[dict[str, Any]]:
         """Return every saved output, newest first."""
-        found = [_json_read(path) for path in self.outputs_dir.glob("*.json")]
+        found = [read_json(path) for path in self.outputs_dir.glob("*.json")]
         return sorted(
             (meta for meta in found if meta), key=lambda meta: meta["created"], reverse=True
         )
@@ -542,6 +542,9 @@ class Supervisor:
         self.session = session
         self.generating = asyncio.Lock()
         self.progress: dict[str, Any] = {}
+        self.jobs = JobStore(library.root)
+        self.running: dict[str, Any] | None = None
+        self.jobs.interrupt_running()
 
     def routes(self) -> list[web.RouteDef]:
         """Return the supervisor's routes."""
@@ -560,6 +563,12 @@ class Supervisor:
             web.delete("/api/outputs/{output_id}", self.delete_output),
             web.get("/api/outputs/{output_id}/audio", self.output_audio),
             web.post("/api/generate", self.generate),
+            web.get("/api/jobs", self.list_jobs),
+            web.post("/api/jobs", self.create_job),
+            web.get("/api/jobs/{job_id}", self.get_job),
+            web.delete("/api/jobs/{job_id}", self.delete_job),
+            web.post("/api/jobs/{job_id}/start", self.start_job),
+            web.post("/api/jobs/{job_id}/stop", self.stop_job),
         ]
 
     async def page(self, _: web.Request) -> web.StreamResponse:
@@ -588,6 +597,7 @@ class Supervisor:
                 "state": self.child.state,
                 "generating": self.generating.locked(),
                 "progress": self.progress if self.generating.locked() else {},
+                "job": self.running["id"] if self.running else "",
             }
         )
 
@@ -687,7 +697,7 @@ class Supervisor:
                 await asyncio.to_thread(encode_audio, source, target, fmt, meta["title"])
             except (ValueError, OSError, FFmpegError) as exc:
                 return _error(500, f"encoding failed: {exc}")
-        slug = re.sub(r"[^a-z0-9]+", "-", meta["title"].lower()).strip("-")[:60] or "narration"
+        slug = re.sub(r"[^a-z0-9]+", "-", meta["title"].lower()).strip("-")[:120] or "narration"
         return web.FileResponse(
             target,
             headers={
@@ -867,7 +877,7 @@ class Supervisor:
         partial.replace(self.library.outputs_dir / f"{output_id}.wav")
         elapsed = time.monotonic() - began
         duration = written / 2 / SAMPLE_RATE
-        _json_write(
+        write_json(
             self.library.outputs_dir / f"{output_id}.json",
             {
                 "id": output_id,
@@ -887,6 +897,302 @@ class Supervisor:
         await response.write_eof()
         return response
 
+    # ---- narration jobs ----
+
+    async def list_jobs(self, _: web.Request) -> web.Response:
+        """List narration jobs, newest first."""
+        return web.json_response({"jobs": self.jobs.jobs()})
+
+    async def get_job(self, request: web.Request) -> web.Response:
+        """Return one job's record with its chapters and progress."""
+        job = self.jobs.job(request.match_info["job_id"])
+        if job is None:
+            return _error(404, "no such job")
+        return web.json_response(job)
+
+    async def create_job(self, request: web.Request) -> web.Response:
+        """Save a narration job for long text; it starts when asked and does not need the GPU.
+
+        The JSON body has ``text``, where lines that start with ``#`` begin chapters, and
+        optional ``title``, ``voice_id``, ``instruction``, ``cfg_scale``, ``seed``, and
+        ``speak_titles`` (default true, which reads each heading before its chapter).
+        """
+        try:
+            body = await request.json()
+        except ValueError:
+            return _error(400, "send a JSON body")
+        if not isinstance(body, dict):
+            return _error(400, "send a JSON object")
+        text = str(body.get("text", "")).strip()
+        if not text or len(text) > MAX_JOB_CHARS:
+            return _error(400, f"send 1 to {MAX_JOB_CHARS:,} characters of text")
+        try:
+            settings = self._settings(body)
+        except ValueError as exc:
+            return _error(400, str(exc))
+        voice_id = str(body.get("voice_id", ""))
+        voice = self.library.voice(voice_id) if voice_id else None
+        if voice_id and voice is None:
+            return _error(400, "unknown voice_id")
+        speak_titles = body.get("speak_titles", True)
+        if not isinstance(speak_titles, bool):
+            return _error(400, "speak_titles must be true or false")
+
+        title = re.sub(r"\s+", " ", str(body.get("title", ""))).strip()[:40]
+        chapters = split_chapters(text, title or "Narration")
+        if not chapters or len(chapters) > MAX_CHAPTERS:
+            return _error(400, f"the text must have 1 to {MAX_CHAPTERS} chapters with text")
+        title = title or re.sub(r"\s+", " ", chapters[0].title)[:40]
+        plan: list[list[tuple[str, float]]] = []
+        for chapter in chapters:
+            chunks = split_text(chapter.body)
+            if speak_titles and chapter.headed:
+                chunks.insert(0, (re.sub(r"\s+", " ", chapter.title)[:60], PARAGRAPH_PAUSE))
+            plan.append(chunks)
+        titles = [re.sub(r"\s+", " ", chapter.title)[:60] for chapter in chapters]
+        job = new_job(title, list(zip(titles, plan, strict=True)), voice, settings, speak_titles)
+        self.jobs.create(job, plan)
+        return web.json_response(job, status=201)
+
+    async def delete_job(self, request: web.Request) -> web.Response:
+        """Delete a job and its unfinished chunks; finished chapters stay in the library."""
+        job_id = request.match_info["job_id"]
+        if self.running and self.running["id"] == job_id:
+            return _error(409, "stop the job before deleting it")
+        if not self.jobs.delete(job_id):
+            return _error(404, "no such job")
+        return web.json_response({"status": "deleted"})
+
+    async def start_job(self, request: web.Request) -> web.Response:
+        """Start or resume a job in the background; it continues after this request ends."""
+        job = self.jobs.job(request.match_info["job_id"])
+        if job is None:
+            return _error(404, "no such job")
+        if job["state"] == "done":
+            return _error(409, "the job is finished")
+        if job["voice_id"] and self.library.voice(job["voice_id"]) is None:
+            return _error(409, "the voice this job uses was deleted")
+        if self.generating.locked():
+            return _error(409, "Breeze is already generating; wait for it or stop it first")
+
+        await self.generating.acquire()
+        self.child.inflight += 1
+        self.running = {"id": job["id"], "reason": "interrupted", "task": None}
+        self.running["task"] = asyncio.create_task(self._run_job(job["id"]))
+        job["state"] = "running"
+        return web.json_response(job, status=202)
+
+    async def stop_job(self, request: web.Request) -> web.Response:
+        """Stop the running job after discarding the part in progress; finished parts stay saved."""
+        job_id = request.match_info["job_id"]
+        run = self.running
+        if run is None or run["id"] != job_id:
+            return _error(409, "the job is not running")
+        run["reason"] = "paused"
+        run["task"].cancel()
+        await asyncio.wait({run["task"]})
+        return web.json_response(self.jobs.job(job_id))
+
+    async def shutdown(self) -> None:
+        """Stop a running job so its record says it was interrupted and can resume."""
+        run = self.running
+        if run is not None and not run["task"].done():
+            run["reason"] = "interrupted"
+            run["task"].cancel()
+            await asyncio.wait({run["task"]})
+
+    def _recount(self, job: dict[str, Any], plan: list[list[tuple[str, float]]]) -> None:
+        """Rebuild a job's progress counts from the chunk files on disk."""
+        job["chunks_done"], job["chars_done"], job["speech_s"] = 0, 0, 0.0
+        for number, (chunks, chapter) in enumerate(zip(plan, job["chapters"], strict=True)):
+            if chapter["output_id"]:
+                done, chars, speech = chapter["chunks_total"], chapter["chars"], chapter["speech_s"]
+            else:
+                paths = [self.jobs.chunk_path(job["id"], number, i) for i in range(len(chunks))]
+                pairs = zip(chunks, paths, strict=True)
+                spoken = [(text, path) for (text, _), path in pairs if path.exists()]
+                done, chars = len(spoken), sum(len(text) for text, _ in spoken)
+                speech = sum(path.stat().st_size for _, path in spoken) / 2 / SAMPLE_RATE
+            chapter["chunks_done"], chapter["speech_s"] = done, round(speech, 2)
+            job["chunks_done"] += done
+            job["chars_done"] += chars
+            job["speech_s"] = round(job["speech_s"] + speech, 2)
+
+    async def _speak_checked(
+        self, text: str, index: int, settings: dict[str, Any], voice: dict[str, Any] | None
+    ) -> tuple[bytes, str | None]:
+        """Speak one chunk, speaking it again with a new seed while it fails the quality check.
+
+        Returns
+        -------
+        tuple of (bytes, str or None)
+            The 16-bit PCM, and a warning when every attempt failed the check, in which case
+            the PCM is the attempt closest to the expected length.
+
+        Raises
+        ------
+        ChunkError
+            If Breeze returned an error on every attempt.
+        RuntimeError
+            If Breeze cannot be restarted after it exited.
+        """
+        best: tuple[float, bytes, str] | None = None
+        failure = ""
+        for attempt in range(JOB_ATTEMPTS):
+            seed = (settings["seed"] + index + attempt * RETRY_SEED_STEP) % SEED_MODULUS
+            try:
+                upstream = await self._speak(text, seed, settings, voice)
+                try:
+                    pcm = await upstream.read()
+                finally:
+                    upstream.release()
+            except (ChunkError, ClientError, TimeoutError) as exc:
+                failure = str(exc) or type(exc).__name__
+                log.warning("attempt %d at a chunk failed: %s", attempt + 1, failure)
+                await self.child.ensure(self.session)
+                continue
+            pcm = pcm[: len(pcm) & ~1]
+            samples = np.frombuffer(pcm, dtype="<i2")
+            reason = check_chunk(samples, text, hit_cap=len(pcm) / FRAME_BYTES >= CAP_FRAMES)
+            if reason is None:
+                return pcm, None
+            log.warning("attempt %d at a chunk was %s", attempt + 1, reason)
+            error = length_error(samples, text)
+            if best is None or error < best[0]:
+                best = (error, pcm, reason)
+        if best is None:
+            raise ChunkError(f"Breeze failed {JOB_ATTEMPTS} times: {failure}")
+        return best[1], f"{best[2]} on all {JOB_ATTEMPTS} attempts; used the closest"
+
+    def _stitch_chapter(
+        self, job: dict[str, Any], number: int, chunks: list[tuple[str, float]]
+    ) -> str:
+        """Join a chapter's chunks and pauses into a library output and return its id.
+
+        The id comes from the job and chapter, so stitching again after an interruption
+        replaces the same output instead of adding a second one.
+        """
+        chapter = job["chapters"][number]
+        output_id = hashlib.sha256(f"{job['id']}:{number}".encode()).hexdigest()[:32]
+        self.library.delete_output(output_id)
+        partial = self.library.outputs_dir / f"{output_id}.wav.part"
+        spoken: list[dict[str, Any]] = []
+        written = 0
+        with wave.open(str(partial), "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(SAMPLE_RATE)
+            for index, (text, pause) in enumerate(chunks):
+                pcm = self.jobs.chunk_path(job["id"], number, index).read_bytes()
+                silence = bytes(int(pause * SAMPLE_RATE) * 2)
+                wav.writeframes(pcm + silence)
+                spoken.append(
+                    {
+                        "text": text,
+                        "start_s": round(written / 2 / SAMPLE_RATE, 2),
+                        "end_s": round((written + len(pcm)) / 2 / SAMPLE_RATE, 2),
+                    }
+                )
+                written += len(pcm) + len(silence)
+        partial.replace(self.library.outputs_dir / f"{output_id}.wav")
+        duration = written / 2 / SAMPLE_RATE
+        title = job["title"]
+        if len(job["chapters"]) > 1:
+            title = f"{job['title']} - {number + 1:02d} {chapter['title']}"
+        write_json(
+            self.library.outputs_dir / f"{output_id}.json",
+            {
+                "id": output_id,
+                "created": time.time(),
+                "title": title,
+                "text": " ".join(text for text, _ in chunks),
+                "voice_id": job["voice_id"],
+                "voice_label": job["voice_label"],
+                "instruction": job["instruction"],
+                "cfg_scale": job["cfg_scale"],
+                "seed": job["seed"],
+                "duration_s": round(duration, 1),
+                "generation_s": round(chapter["generation_s"], 1),
+                "rtf": round(chapter["generation_s"] / duration, 2) if duration else None,
+                "chunks": spoken,
+                "warnings": chapter["warnings"],
+                "job_id": job["id"],
+                "chapter": number + 1,
+            },
+        )
+        return output_id
+
+    async def _run_job(self, job_id: str) -> None:
+        """Speak every chapter of a job that has no saved audio, saving each chunk as it is made.
+
+        Chunks that already exist on disk are skipped, so a job resumes where it stopped.
+        The job's state is ``done``, ``failed`` with an error message, or the reason the
+        task was cancelled (``paused`` by the user, ``interrupted`` by a shutdown).
+        """
+        run = cast(dict[str, Any], self.running)
+        job = cast(dict[str, Any], self.jobs.job(job_id))
+        job["state"], job["error"] = "running", ""
+        try:
+            plan = self.jobs.plan(job_id)
+            self._recount(job, plan)
+            self.jobs.save(job)
+            voice = self.library.voice(job["voice_id"]) if job["voice_id"] else None
+            settings = {key: job[key] for key in ("instruction", "cfg_scale", "seed")}
+            await self.child.ensure(self.session)
+
+            # Speak the chunks of each chapter that has no saved audio, then stitch it
+            for number, chunks in enumerate(plan):
+                chapter = job["chapters"][number]
+                if chapter["output_id"]:
+                    continue
+                chapter["state"] = "running"
+                for index, (text, _) in enumerate(chunks):
+                    if self.jobs.chunk_path(job_id, number, index).exists():
+                        continue
+                    self.progress = {
+                        "chunk": job["chunks_done"] + 1,
+                        "chunks": job["chunks_total"],
+                        "chapter": number + 1,
+                        "chapters": len(plan),
+                    }
+                    started = time.monotonic()
+                    pcm, warning = await self._speak_checked(text, index, settings, voice)
+                    self.jobs.write_chunk(job_id, number, index, pcm)
+                    spent = time.monotonic() - started
+                    seconds = len(pcm) / 2 / SAMPLE_RATE
+                    for record in (job, chapter):
+                        record["chunks_done"] += 1
+                        record["speech_s"] = round(record["speech_s"] + seconds, 2)
+                        record["generation_s"] = round(record["generation_s"] + spent, 2)
+                    job["chars_done"] += len(text)
+                    if warning:
+                        chapter["warnings"].append(f"part {index + 1}: {warning}")
+                    self.jobs.save(job)
+                output_id = await asyncio.to_thread(self._stitch_chapter, job, number, chunks)
+                chapter["output_id"], chapter["state"] = output_id, "done"
+                self.jobs.save(job)
+                self.jobs.clear_chunks(job_id, number)
+            job["state"] = "done"
+        except asyncio.CancelledError:
+            job["state"] = run["reason"]
+            raise
+        except (ChunkError, RuntimeError, OSError) as exc:
+            log.warning("job %s failed: %s", job_id, exc)
+            job["state"], job["error"] = "failed", str(exc)
+        except Exception as exc:
+            log.exception("job %s crashed", job_id)
+            job["state"], job["error"] = "failed", f"internal error: {exc}"
+            raise
+        finally:
+            for chapter in job["chapters"]:
+                if chapter["state"] == "running":
+                    chapter["state"] = "pending"
+            self.jobs.save(job)
+            self.running = None
+            self.progress = {}
+            self.child.inflight -= 1
+            self.generating.release()
+
 
 def build_app(child: Child, library: Library, session: ClientSession) -> web.Application:
     """Create the supervisor application.
@@ -902,9 +1208,11 @@ def build_app(child: Child, library: Library, session: ClientSession) -> web.App
     """
     app = web.Application(client_max_size=64 * 1024**2, middlewares=[guard])
     app["library"] = library
-    app.add_routes(Supervisor(child, library, session).routes())
+    supervisor = Supervisor(child, library, session)
+    app.add_routes(supervisor.routes())
 
     async def stop_child(_: web.Application) -> None:
+        await supervisor.shutdown()
         child.inflight = 0
         await child.stop()
 

@@ -2,10 +2,12 @@
 
 Serves ``/health`` and ``/v1/audio/speech`` on the port given as the first argument.
 Every request is appended to the JSON-lines file in ``FAKE_LOG``. Behavior comes from
-the environment: ``FAKE_SECONDS`` is the length of audio per request, ``FAKE_BUSY_FIRST``
-the number of requests answered 409 before one succeeds, ``FAKE_FAIL`` makes every
-request fail with 500, and ``FAKE_GATE`` is a file the server waits to see before it
-streams the last block, which lets a test hold a request in flight.
+the environment: ``FAKE_SECONDS`` is the length of audio per request, ``FAKE_PER_CHAR``
+sizes the audio by the text instead, ``FAKE_SHORT_FIRST`` the number of requests answered
+with a 0.1 s clip before one is normal, ``FAKE_BUSY_FIRST`` the number answered 409
+before one succeeds, ``FAKE_FAIL`` makes every request fail with 500, and ``FAKE_GATE``
+is a file the server waits to see before it streams the last block, which lets a test
+hold a request in flight.
 """
 
 import asyncio
@@ -20,6 +22,7 @@ from aiohttp import web
 
 RATE = 24000
 BUSY_LEFT = int(os.environ.get("FAKE_BUSY_FIRST", "0"))
+SHORT_LEFT = int(os.environ.get("FAKE_SHORT_FIRST", "0"))
 
 
 def tone(seconds: float) -> bytes:
@@ -35,7 +38,7 @@ async def health(_: web.Request) -> web.Response:
 
 async def speech(request: web.Request) -> web.StreamResponse:
     """Record the form fields, then stream PCM in blocks with an odd byte count."""
-    global BUSY_LEFT
+    global BUSY_LEFT, SHORT_LEFT
     form = await request.post()
     record = {key: str(value) for key, value in form.items() if key != "ref_audio"}
     upload = form.get("ref_audio")
@@ -48,7 +51,13 @@ async def speech(request: web.Request) -> web.StreamResponse:
     if os.environ.get("FAKE_FAIL"):
         return web.json_response({"detail": "boom"}, status=500)
 
-    pcm = tone(float(os.environ.get("FAKE_SECONDS", "4")))
+    seconds = float(os.environ.get("FAKE_SECONDS", "4"))
+    if os.environ.get("FAKE_PER_CHAR"):
+        seconds = len(str(form.get("text", ""))) * float(os.environ["FAKE_PER_CHAR"])
+    if SHORT_LEFT:
+        SHORT_LEFT -= 1
+        seconds = 0.1
+    pcm = tone(seconds)
     response = web.StreamResponse(headers={"Content-Type": "audio/pcm"})
     await response.prepare(request)
     cut = len(pcm) // 2 + 1
