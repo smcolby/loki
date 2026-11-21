@@ -95,7 +95,7 @@
         <button class="secondary" id="stop" disabled>Stop</button>
         <span class="muted" id="hint"></span>
       </div>
-      <p class="muted">M4A and MP3 copies are levelled to -20 dB RMS with peaks under -3 dB (ACX audiobook limits); WAV is the untouched master. Clone only voices you have the right to use. Output is synthetic speech from Breeze TTS 2, for personal, non-commercial use.</p>
+      <p class="muted">M4A and MP3 copies are leveled to -20 dB RMS with peaks under -3 dB (ACX audiobook limits); WAV is the untouched master. Clone only voices you have the right to use. Output is synthetic speech from Breeze TTS 2, for personal, non-commercial use.</p>
     </div>
 
     <div class="panel" id="player" hidden>
@@ -106,8 +106,8 @@
       <div id="result" hidden>
         <div class="actions">
           <a id="dlWav" download>WAV</a>
-          <a id="dlM4a" download>M4A (AAC 128 kbps, levelled)</a>
-          <a id="dlMp3" download>MP3 (128 kbps, levelled)</a>
+          <a id="dlM4a" download>M4A (AAC 128 kbps, leveled)</a>
+          <a id="dlMp3" download>MP3 (128 kbps, leveled)</a>
         </div>
         <div class="row" id="saveVoice" hidden>
           <div><label for="newVoiceLabel">Save the start of this audio as a voice</label>
@@ -322,7 +322,7 @@ async function refreshOutputs() {
            + (out.voice_label ? `, voice ${out.voice_label}` : "") + (out.rtf ? `, made at ${(1 / out.rtf).toFixed(2)}x real time` : ""))),
       ...(out.warnings.length ? [el("div", { class: "warn" }, out.warnings.join("; "))] : []),
       el("audio", { controls: "", preload: "none", src: api(`outputs/${out.id}/audio?format=wav`) }),
-      el("div", { class: "actions" }, link("wav", "WAV"), link("m4a", "M4A (AAC 128 kbps, levelled)"), link("mp3", "MP3 (128 kbps, levelled)"),
+      el("div", { class: "actions" }, link("wav", "WAV"), link("m4a", "M4A (AAC 128 kbps, leveled)"), link("mp3", "MP3 (128 kbps, leveled)"),
          el("button", { class: "secondary", onclick: async () => {
            if (confirm(`Delete "${out.title}"?`)) { await request(`outputs/${out.id}`, { method: "DELETE" }); refreshOutputs(); }
          } }, "Delete"))));
