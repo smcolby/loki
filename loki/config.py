@@ -557,7 +557,8 @@ def speech_tag(source_dir: Path) -> str:
     Parameters
     ----------
     source_dir : Path
-        Directory holding the speech image's Dockerfile, constraints, supervisor, and Studio.
+        Directory holding the speech image's Dockerfile, constraints, supervisor,
+        narration module, and Studio.
 
     Returns
     -------
