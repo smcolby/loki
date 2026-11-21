@@ -24,7 +24,7 @@ RUN pip freeze | grep -E '^(torch|torchaudio|torchvision|triton|pytorch-triton)'
     && pip install --no-cache-dir --no-deps qwen-tts==0.1.1 \
     && pip freeze | grep -E '^(torch|torchaudio|triton|transformers|qwen-tts)=='
 
-COPY speech_supervisor.py /opt/speech/speech_supervisor.py
+COPY speech_supervisor.py narration.py /opt/speech/
 COPY studio/ /opt/speech/studio/
 
 ENV PYTHONUNBUFFERED=1 \

@@ -535,6 +535,7 @@ SPEECH_SOURCES = (
     "Dockerfile",
     "constraints.txt",
     "speech_supervisor.py",
+    "narration.py",
     "studio/index.html",
 )
 
