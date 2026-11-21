@@ -57,6 +57,8 @@ SENTENCE_PAUSE = 0.3
 PARAGRAPH_PAUSE = 0.8
 SPEAK_ATTEMPTS = 6
 REFERENCE_SECONDS = (3.0, 30.0)
+# Breeze's README uses 4; the Studio slider stops at 6 because higher values are untested
+MAX_CFG_SCALE = 6.0
 AUDIO_FORMATS = {
     "wav": ("audio/wav", "wav"),
     "m4a": ("audio/mp4", "m4a"),
@@ -710,8 +712,8 @@ class Supervisor:
             raise ValueError("cfg_scale must be a number and seed an integer") from exc
         if len(instruction) > 1000:
             raise ValueError("the instruction is limited to 1000 characters")
-        if not 1.0 <= cfg_scale <= 10.0:
-            raise ValueError("cfg_scale must be between 1 and 10")
+        if not 1.0 <= cfg_scale <= MAX_CFG_SCALE:
+            raise ValueError("cfg_scale must be between 1 and 6")
         if not 0 <= seed < 2**31 - 10_000:
             raise ValueError("seed must be a non-negative integer below 2147473647")
         if cfg_scale > 1.0 and not instruction:

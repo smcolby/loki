@@ -340,7 +340,7 @@ async def test_generate_sends_guidance_only_with_an_instruction(client, breeze_e
     ("fields", "message"),
     [
         ({"cfg_scale": "4"}, "needs an instruction"),
-        ({"cfg_scale": "11", "instruction": "x"}, "between 1 and 10"),
+        ({"cfg_scale": "7", "instruction": "x"}, "between 1 and 6"),
         ({"seed": "-1"}, "non-negative"),
         ({"seed": "abc"}, "must be a number"),
         ({"voice_id": "../../etc/passwd"}, "unknown voice_id"),
