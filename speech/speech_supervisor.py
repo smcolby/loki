@@ -80,7 +80,7 @@ SENTENCE_END = re.compile(r"(?:(?<=[.!?])|(?<=[.!?][\"'”’)\]]))\s+(?=[^\s.])
 SENTENCE_PAUSE = 0.3
 PARAGRAPH_PAUSE = 0.8
 SPEAK_ATTEMPTS = 6
-REFERENCE_SECONDS = (3.0, 30.0)
+REFERENCE_SECONDS = (3.0, 120.0)
 # Breeze's README uses 4; the Studio slider stops at 6 because higher values are untested
 MAX_CFG_SCALE = 6.0
 # A narration job speaks a chunk again with a new seed when it fails the quality check

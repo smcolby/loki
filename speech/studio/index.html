@@ -165,7 +165,7 @@
   <section id="tab-voices" hidden>
     <div class="panel">
       <h2>Add a voice</h2>
-      <p class="muted">A voice is a clean 3 to 30 second recording and its exact transcript. Breeze clones from the clip each time, so the transcript must match the words spoken, including repetitions.</p>
+      <p class="muted">A voice is a clean 3 to 120 second recording and its exact transcript. Breeze clones from the clip each time, so the transcript must match the words spoken, including repetitions.</p>
       <div class="row">
         <div><label for="vLabel">Name</label><input type="text" id="vLabel" maxlength="80"></div>
         <div><label for="vFile">Audio file</label><input type="file" id="vFile" accept="audio/*"></div>
@@ -352,8 +352,8 @@ async function toReferenceWav(file) {
   const context = new AudioContext();
   const decoded = await context.decodeAudioData(await file.arrayBuffer());
   await context.close();
-  if (decoded.duration < 3 || decoded.duration > 30) {
-    throw new Error(`the clip is ${decoded.duration.toFixed(1)} s; use 3 to 30 s`);
+  if (decoded.duration < 3 || decoded.duration > 120) {
+    throw new Error(`the clip is ${decoded.duration.toFixed(1)} s; use 3 to 120 s`);
   }
   const frames = Math.round(decoded.duration * 24000);
   const offline = new OfflineAudioContext(1, frames, 24000);

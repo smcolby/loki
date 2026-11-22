@@ -625,13 +625,13 @@ async def test_voice_upload_is_converted_to_a_24khz_mono_clip(client):
     assert abs(len(samples) / rate - 5.0) < 0.01
 
 
-@pytest.mark.parametrize("seconds", [1.0, 40.0])
-async def test_voice_upload_outside_three_to_thirty_seconds_is_refused(client, seconds):
-    """Clips too short to clone from, or long enough to crowd out the output, are refused."""
+@pytest.mark.parametrize("seconds", [1.0, 130.0])
+async def test_voice_upload_outside_three_to_120_seconds_is_refused(client, seconds):
+    """Clips too short to clone from, or over two minutes, are refused."""
     response = await client.post("/api/voices", data=voice_form(seconds), headers=STUDIO)
 
     assert response.status == 400
-    assert "use 3 to 30 s" in (await response.json())["error"]["message"]
+    assert "use 3 to 120 s" in (await response.json())["error"]["message"]
 
 
 async def test_voice_upload_that_is_not_audio_is_refused(client):
@@ -699,8 +699,8 @@ async def test_a_voice_can_be_saved_from_the_first_chunk_of_an_output(client):
 
 
 async def test_a_first_chunk_too_long_to_be_a_reference_is_refused(client, monkeypatch):
-    """A sample longer than 30 s is refused with advice, instead of cutting its transcript."""
-    monkeypatch.setenv("FAKE_SECONDS", "35")
+    """A sample longer than 120 s is refused with advice, instead of cutting its transcript."""
+    monkeypatch.setenv("FAKE_SECONDS", "125")
     _, _, headers = await generate(client, "A long sample.")
 
     response = await client.post(
