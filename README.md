@@ -274,6 +274,7 @@ Download the checkpoint (about 7.7 GB, every file in the Hugging Face repository
 speech:
   enabled: true
   data_dir: ~/.llms/breeze   # model/ (the checkpoint), library/ (voices and audio), cache/
+  workers: 1                 # 2 speaks a narration job's parts on two Breeze processes at once
 ```
 
 `loki start` builds the `speech-breeze` image (about 30 GB, mostly the ROCm PyTorch base) and serves the Studio at `http://loki.local/breeze/`.
@@ -291,7 +292,9 @@ In the Studio:
 
 A narration job speaks neighboring paragraphs as one part when they fit together in 1,200 characters. A paragraph over that is cut at sentence ends into the fewest parts, as even in length as possible, and those parts are not joined with their neighbors. A blank line ends a paragraph, and so does a line break after a sentence end; a line break inside a sentence joins the lines. The limit leaves room under Breeze's 120 s cap at the slowest pace measured (0.089 s per character). The job saves every part as soon as it is made and joins the parts into a chapter file when the chapter is complete. A chapter that is already finished is not generated again on resume. Each part is checked against its text: audio far shorter or longer than its text needs, silent audio, a silence over 4 s, or audio that hit Breeze's length cap is spoken again with another seed, up to three attempts. If no attempt passes, the closest one is used and the chapter lists a warning. While a job runs, Breeze occupies the GPU, so an Open WebUI or `pi` request waits 2 minutes and then fails with a 503; stop the job or wait for it to finish first. At the measured 0.77x real time, 10 hours of narration needs about 13 hours of generation; jobs of that length have not been run.
 
-Breeze serves one request at a time. The Studio has no sign-in, like the rest of the LAN-facing stack, and refuses changes without the Studio's request header, which a page on another site cannot add. Clone only voices you have the right to use.
+With `workers: 2` a narration job speaks its parts on two Breeze processes at once. On the RX 7900 XTX that measured 1.19x real time against 0.79x for one process (two chunks of the same text and seed, 89 s against 134 s), so 10 hours of narration needs about 8.4 hours instead of 12.7. The two processes use about 21 of the 24 GiB of VRAM, so a third does not fit. The second process starts with the job, after the first, and stops when the job ends; **Generate** always uses the first process. If the second does not start, the job continues on one. The parts and their seeds are the same as with one process. Batch synthesis, which Breeze offers, was slower here (0.34x to 0.77x), because its plain-clone path does not use the depth-decoder graph.
+
+Each Breeze process serves one request at a time. The Studio has no sign-in, like the rest of the LAN-facing stack, and refuses changes without the Studio's request header, which a page on another site cannot add. Clone only voices you have the right to use.
 
 ---
 

@@ -26,6 +26,7 @@ import sys
 import time
 import wave
 import zipfile
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
@@ -57,6 +58,8 @@ log = logging.getLogger("speech")
 
 PUBLIC_PORT = 8080
 CHILD_PORT = 8081
+# A narration job can run on more Breeze processes at once; each needs its own port
+HELPER_PORTS = (8082,)
 START_TIMEOUT = 600.0
 OWNED_FLAGS = ("--host", "--port")
 MODEL_ID = "breeze-tts-2"
@@ -728,10 +731,20 @@ class Supervisor:
         Saved voices and audio.
     session : ClientSession
         Client session for requests to Breeze.
+    helpers : list of Child, optional
+        More Breeze processes that a narration job speaks on beside ``child``. They start
+        with a job and stop when it ends; single generations use ``child`` only.
     """
 
-    def __init__(self, child: Child, library: Library, session: ClientSession):
+    def __init__(
+        self,
+        child: Child,
+        library: Library,
+        session: ClientSession,
+        helpers: list[Child] | None = None,
+    ):
         self.child = child
+        self.helpers = helpers or []
         self.library = library
         self.session = session
         self.generating = asyncio.Lock()
@@ -774,7 +787,8 @@ class Supervisor:
 
     async def health(self, _: web.Request) -> web.Response:
         """Report whether Breeze is loading or loaded, as Strata's health does."""
-        return web.json_response({"status": "ok", "loaded": self.child.loaded})
+        loaded = any(process.loaded for process in [self.child, *self.helpers])
+        return web.json_response({"status": "ok", "loaded": loaded})
 
     async def models(self, _: web.Request) -> web.Response:
         """List the speech model without starting Breeze."""
@@ -783,7 +797,8 @@ class Supervisor:
     async def unload(self, request: web.Request) -> web.Response:
         """Stop Breeze, or answer 409 while a request is in flight."""
         await request.read()
-        if await self.child.stop():
+        stopped = [await process.stop() for process in [self.child, *self.helpers]]
+        if all(stopped):
             return web.json_response({"status": "unloaded"})
         return web.json_response({"status": "busy"}, status=409)
 
@@ -1040,14 +1055,18 @@ class Supervisor:
         seed: int,
         settings: dict[str, Any],
         voice: dict[str, Any] | None,
+        child: Child | None = None,
     ) -> Any:
         """Open Breeze's streaming response for one chunk, retrying while it is busy.
+
+        ``child`` is the Breeze process to ask; it defaults to the supervisor's main one.
 
         Raises
         ------
         ChunkError
             If Breeze stays busy or answers with an error.
         """
+        child = child or self.child
         reference = self.library.reference_path(voice["id"]).read_bytes() if voice else b""
         for attempt in range(SPEAK_ATTEMPTS):
             data = FormData()
@@ -1059,7 +1078,7 @@ class Supervisor:
             if voice:
                 data.add_field("ref_text", voice["ref_text"])
                 data.add_field("ref_audio", reference, filename="ref.wav", content_type="audio/wav")
-            response = await self.session.post(self.child.url + "/v1/audio/speech", data=data)
+            response = await self.session.post(child.url + "/v1/audio/speech", data=data)
             if response.status == 200:
                 return response
             detail = (await response.text())[:200]
@@ -1285,7 +1304,8 @@ class Supervisor:
             return _error(409, "Breeze is already generating; wait for it or stop it first")
 
         await self.generating.acquire()
-        self.child.inflight += 1
+        for process in [self.child, *self.helpers]:
+            process.inflight += 1
         self.running = {"id": job["id"], "reason": "interrupted", "task": None}
         self.running["task"] = asyncio.create_task(self._run_job(job["id"]))
         job["state"] = "running"
@@ -1328,9 +1348,16 @@ class Supervisor:
             job["speech_s"] = round(job["speech_s"] + speech, 2)
 
     async def _speak_checked(
-        self, text: str, index: int, settings: dict[str, Any], voice: dict[str, Any] | None
+        self,
+        text: str,
+        index: int,
+        settings: dict[str, Any],
+        voice: dict[str, Any] | None,
+        child: Child | None = None,
     ) -> tuple[bytes, str | None, list[str]]:
         """Speak one chunk, speaking it again with a new seed while it fails the quality check.
+
+        ``child`` is the Breeze process to ask; it defaults to the supervisor's main one.
 
         Returns
         -------
@@ -1345,13 +1372,14 @@ class Supervisor:
         RuntimeError
             If Breeze cannot be restarted after it exited.
         """
+        child = child or self.child
         best: tuple[float, bytes, str] | None = None
         failure = ""
         failed: list[str] = []
         for attempt in range(JOB_ATTEMPTS):
             seed = (settings["seed"] + index + attempt * RETRY_SEED_STEP) % SEED_MODULUS
             try:
-                upstream = await self._speak(text, seed, settings, voice)
+                upstream = await self._speak(text, seed, settings, voice, child)
                 try:
                     pcm = await upstream.read()
                 finally:
@@ -1360,7 +1388,7 @@ class Supervisor:
                 failure = str(exc) or type(exc).__name__
                 log.warning("attempt %d at a chunk failed: %s", attempt + 1, failure)
                 failed.append(f"attempt {attempt + 1}: Breeze error, {failure}")
-                await self.child.ensure(self.session)
+                await child.ensure(self.session)
                 continue
             pcm = pcm[: len(pcm) & ~1]
             samples = np.frombuffer(pcm, dtype="<i2")
@@ -1437,6 +1465,30 @@ class Supervisor:
         )
         return output_id
 
+    async def _start_workers(self) -> list[Child]:
+        """Start Breeze for a job and return the processes it speaks on.
+
+        The main process starts first, then each helper, one at a time so their start-up
+        memory peaks do not overlap. A helper that does not start is left out with a
+        warning and the job continues on the others.
+
+        Raises
+        ------
+        RuntimeError
+            If the main process cannot start.
+        """
+        await self.child.ensure(self.session)
+        workers = [self.child]
+        for helper in self.helpers:
+            try:
+                await helper.ensure(self.session)
+            except RuntimeError as exc:
+                log.warning("helper Breeze on port %d did not start: %s", helper.port, exc)
+                await helper.stop()
+            else:
+                workers.append(helper)
+        return workers
+
     async def _run_job(self, job_id: str) -> None:
         """Speak every chapter of a job that has no saved audio, saving each chunk as it is made.
 
@@ -1453,17 +1505,36 @@ class Supervisor:
             self.jobs.save(job)
             voice = self.library.voice(job["voice_id"]) if job["voice_id"] else None
             settings = {key: job[key] for key in ("instruction", "cfg_scale", "seed")}
-            await self.child.ensure(self.session)
+            workers = await self._start_workers()
 
-            # Speak the chunks of each chapter that has no saved audio, then stitch it
+            # Queue the chunks that have no saved file, and count what each chapter still needs
+            queue: deque[tuple[int, int, str]] = deque()
+            missing: dict[int, int] = {}
             for number, chunks in enumerate(plan):
-                chapter = job["chapters"][number]
-                if chapter["output_id"]:
+                if job["chapters"][number]["output_id"]:
                     continue
-                chapter["state"] = "running"
-                for index, (text, _) in enumerate(chunks):
-                    if self.jobs.chunk_path(job_id, number, index).exists():
-                        continue
+                todo = [
+                    (number, index, text)
+                    for index, (text, _) in enumerate(chunks)
+                    if not self.jobs.chunk_path(job_id, number, index).exists()
+                ]
+                queue.extend(todo)
+                missing[number] = len(todo)
+
+            async def finish(number: int) -> None:
+                """Stitch a chapter whose chunks are all saved, then drop the chunk files."""
+                output_id = await asyncio.to_thread(self._stitch_chapter, job, number, plan[number])
+                chapter = job["chapters"][number]
+                chapter["output_id"], chapter["state"] = output_id, "done"
+                self.jobs.save(job)
+                self.jobs.clear_chunks(job_id, number)
+
+            async def work(worker: Child) -> None:
+                """Speak queued chunks on one Breeze process until the queue is empty."""
+                while queue:
+                    number, index, text = queue.popleft()
+                    chapter = job["chapters"][number]
+                    chapter["state"] = "running"
                     self.progress = {
                         "chunk": job["chunks_done"] + 1,
                         "chunks": job["chunks_total"],
@@ -1471,7 +1542,9 @@ class Supervisor:
                         "chapters": len(plan),
                     }
                     started = time.monotonic()
-                    pcm, warning, failed = await self._speak_checked(text, index, settings, voice)
+                    pcm, warning, failed = await self._speak_checked(
+                        text, index, settings, voice, worker
+                    )
                     self.jobs.write_chunk(job_id, number, index, pcm)
                     spent = time.monotonic() - started
                     seconds = len(pcm) / 2 / SAMPLE_RATE
@@ -1495,10 +1568,21 @@ class Supervisor:
                             len(failed),
                         )
                     self.jobs.save(job)
-                output_id = await asyncio.to_thread(self._stitch_chapter, job, number, chunks)
-                chapter["output_id"], chapter["state"] = output_id, "done"
-                self.jobs.save(job)
-                self.jobs.clear_chunks(job_id, number)
+                    missing[number] -= 1
+                    if not missing[number]:
+                        await finish(number)
+
+            # Stitch chapters that were already fully spoken, then speak the rest on every worker
+            for number in [number for number, count in missing.items() if not count]:
+                await finish(number)
+            tasks = [asyncio.create_task(work(worker)) for worker in workers]
+            try:
+                await asyncio.gather(*tasks)
+            except BaseException:
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                raise
             job["state"] = "done"
         except asyncio.CancelledError:
             job["state"] = run["reason"]
@@ -1517,11 +1601,21 @@ class Supervisor:
             self.jobs.save(job)
             self.running = None
             self.progress = {}
-            self.child.inflight -= 1
-            self.generating.release()
+            for process in [self.child, *self.helpers]:
+                process.inflight -= 1
+            try:
+                for helper in self.helpers:
+                    await helper.stop()
+            finally:
+                self.generating.release()
 
 
-def build_app(child: Child, library: Library, session: ClientSession) -> web.Application:
+def build_app(
+    child: Child,
+    library: Library,
+    session: ClientSession,
+    helpers: list[Child] | None = None,
+) -> web.Application:
     """Create the supervisor application.
 
     Parameters
@@ -1532,16 +1626,19 @@ def build_app(child: Child, library: Library, session: ClientSession) -> web.App
         Saved voices and audio.
     session : ClientSession
         Client session for requests to Breeze.
+    helpers : list of Child, optional
+        More Breeze processes for narration jobs to speak on.
     """
     app = web.Application(client_max_size=64 * 1024**2, middlewares=[guard])
     app["library"] = library
-    supervisor = Supervisor(child, library, session)
+    supervisor = Supervisor(child, library, session, helpers)
     app.add_routes(supervisor.routes())
 
     async def stop_child(_: web.Application) -> None:
         await supervisor.shutdown()
-        child.inflight = 0
-        await child.stop()
+        for process in [child, *(helpers or [])]:
+            process.inflight = 0
+            await process.stop()
 
     app.on_cleanup.append(stop_child)
     return app
@@ -1552,13 +1649,18 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     try:
         command = child_command(sys.argv[1:], CHILD_PORT)
+        extra = int(os.environ.get("SPEECH_WORKERS", "1")) - 1
+        helper_commands = [
+            (port, child_command(sys.argv[1:], port)) for port in HELPER_PORTS[: max(extra, 0)]
+        ]
     except ValueError as exc:
         sys.exit(f"Cannot start Breeze: {exc}")
     library = Library(Path(os.environ.get("SPEECH_DATA", "/data")))
 
     async def factory() -> web.Application:
         session = ClientSession(timeout=ClientTimeout(total=None, sock_connect=10))
-        app = build_app(Child(command, CHILD_PORT), library, session)
+        helpers = [Child(helper_command, port) for port, helper_command in helper_commands]
+        app = build_app(Child(command, CHILD_PORT), library, session, helpers)
 
         async def close_session(_: web.Application) -> None:
             await session.close()

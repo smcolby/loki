@@ -573,6 +573,25 @@ def test_build_engines_compose_runs_the_speech_engine_as_the_host_user(tmp_path,
     assert breeze["command"] == ["--fast-depth-decoder"]
     assert "TORCHINDUCTOR_CACHE_DIR=/cache/inductor" in breeze["environment"]
     assert "HF_HUB_OFFLINE=1" in breeze["environment"]
+    assert "SPEECH_WORKERS=1" in breeze["environment"]
+
+
+def test_speech_workers_default_to_one_and_pass_to_the_container(tmp_path):
+    """Two workers reach the supervisor as an environment variable; one is the default."""
+    assert SpeechConfig().workers == 1
+
+    speech = SpeechConfig(enabled=True, data_dir=tmp_path / "breeze", workers=2)
+    text = build_engines_compose(LokiConfig(speech=speech), IMAGES, tmp_path / "root")
+
+    environment = yaml.safe_load(text)["services"]["speech-breeze"]["environment"]
+    assert "SPEECH_WORKERS=2" in environment
+
+
+@pytest.mark.parametrize("workers", [0, 3])
+def test_speech_workers_outside_one_or_two_are_refused(workers):
+    """Only one or two Breeze processes fit in the GPU's memory."""
+    with pytest.raises(ValidationError):
+        SpeechConfig(workers=workers)
 
 
 def test_build_engines_compose_omits_the_speech_engine_when_disabled(tmp_path):

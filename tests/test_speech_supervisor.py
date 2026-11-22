@@ -1280,3 +1280,110 @@ async def test_deleting_a_job_removes_its_files_but_not_its_finished_chapters(
     assert deleted.status == 200
     assert not (tmp_path / "data" / "jobs" / job["id"]).exists()
     assert len((await (await client.get("/api/outputs")).json())["outputs"]) == 1
+
+
+# ---- narration jobs on more than one Breeze process ----
+
+
+@pytest.fixture
+async def helper(breeze_env):
+    """A second fake Breeze for narration jobs, stopped at the end of the test."""
+    port = free_port()
+    process = sup.Child([sys.executable, str(FAKE), str(port)], port, start_timeout=30)
+    yield process
+    await process.stop()
+
+
+@pytest.fixture
+async def pair_client(aiohttp_client, child, helper, tmp_path):
+    """Supervisor client over two fake Breeze processes."""
+    session = ClientSession()
+    yield await aiohttp_client(
+        sup.build_app(child, sup.Library(tmp_path / "data"), session, [helper])
+    )
+    await session.close()
+
+
+async def test_a_job_speaks_on_both_processes_and_keeps_each_chapter_in_order(
+    pair_client, breeze_env, paced, tmp_path
+):
+    """Chunks go to whichever process is free, and the stitched text still reads in order."""
+    _, job = await create_job(pair_client, title="My book")
+
+    await start_job(pair_client, job["id"])
+    done = await wait_for_state(pair_client, job["id"], ("done", "failed"))
+
+    assert done["state"] == "done"
+    assert (done["chunks_done"], done["chars_done"]) == (4, done["chars_total"])
+    requests = logged(breeze_env)
+    assert len({entry["port"] for entry in requests}) == 2
+    assert sorted(entry["seed"] for entry in requests) == ["42", "42", "43", "43"]
+    texts = []
+    for chapter in done["chapters"]:
+        meta = json.loads(
+            (tmp_path / "data" / "outputs" / f"{chapter['output_id']}.json").read_text()
+        )
+        texts.append(meta["text"])
+    assert texts == [
+        "Chapter One First chapter words here.",
+        "Chapter Two Second chapter words here.",
+    ]
+
+
+async def test_the_second_process_stops_when_a_job_ends(pair_client, child, helper, breeze_env):
+    """The helper starts with the job and is stopped after it, so its memory is released."""
+    _, job = await create_job(pair_client)
+
+    await start_job(pair_client, job["id"])
+    await wait_for_state(pair_client, job["id"], ("done", "failed"))
+
+    assert child.state == "ready"
+    assert helper.state == "stopped"
+    assert helper.inflight == child.inflight == 0
+
+
+async def test_a_single_generation_does_not_start_the_second_process(
+    pair_client, helper, breeze_env
+):
+    """Only narration jobs use the helper; the Studio's Generate stays on the main process."""
+    status, _, _ = await generate(pair_client, "Hello there.")
+
+    assert status == 200
+    assert helper.state == "stopped"
+    assert len({entry["port"] for entry in logged(breeze_env)}) == 1
+
+
+async def test_a_job_continues_on_one_process_when_the_helper_cannot_start(
+    aiohttp_client, child, breeze_env, paced, tmp_path, caplog
+):
+    """A helper that exits during start is left out, and the job finishes on the main process."""
+    broken = sup.Child([sys.executable, "-c", "raise SystemExit(3)"], free_port(), start_timeout=5)
+    session = ClientSession()
+    client = await aiohttp_client(
+        sup.build_app(child, sup.Library(tmp_path / "data"), session, [broken])
+    )
+    _, job = await create_job(client)
+
+    await start_job(client, job["id"])
+    done = await wait_for_state(client, job["id"], ("done", "failed"))
+    await session.close()
+
+    assert done["state"] == "done"
+    assert len({entry["port"] for entry in logged(breeze_env)}) == 1
+    assert "helper Breeze on port" in caplog.text
+
+
+async def test_a_failed_chunk_ends_the_job_on_both_processes_and_frees_them(
+    pair_client, helper, breeze_env, monkeypatch
+):
+    """An error on every attempt fails the job, stops the helper, and releases the lock."""
+    monkeypatch.setenv("FAKE_FAIL", "1")
+    _, job = await create_job(pair_client, PLAIN)
+
+    await start_job(pair_client, job["id"])
+    failed = await wait_for_state(pair_client, job["id"], ("done", "failed"))
+    status = await (await pair_client.get("/api/status")).json()
+
+    assert failed["state"] == "failed"
+    assert helper.state == "stopped"
+    assert status["generating"] is False

@@ -41,6 +41,7 @@ async def speech(request: web.Request) -> web.StreamResponse:
     global BUSY_LEFT, SHORT_LEFT
     form = await request.post()
     record = {key: str(value) for key, value in form.items() if key != "ref_audio"}
+    record["port"] = sys.argv[1]
     upload = form.get("ref_audio")
     record["ref_audio_bytes"] = len(upload.file.read()) if hasattr(upload, "file") else 0
     with open(os.environ["FAKE_LOG"], "a") as log:

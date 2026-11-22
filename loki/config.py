@@ -306,6 +306,11 @@ class SpeechConfig(BaseModel):
         PyTorch release of the base image; Breeze pins ``torch==2.9.1``.
     args : list of str
         Extra ``breeze_infer.api`` options, such as ``--fast-depth-decoder``.
+    workers : int
+        Breeze processes a narration job speaks on at once, 1 or 2. Two finish a job about
+        1.5 times faster than one and use about 21 of 24 GiB of GPU memory; the second
+        starts with a job and stops when it ends. Single generations always use one.
+        Default is 1.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -316,6 +321,7 @@ class SpeechConfig(BaseModel):
     rocm_version: str = "7.2.4"
     torch_version: str = "2.9.1"
     args: list[str] = ["--fast-depth-decoder"]
+    workers: int = Field(default=1, ge=1, le=2)
 
     @field_validator("data_dir")
     @classmethod
@@ -816,6 +822,7 @@ def build_engines_compose(config: LokiConfig, images: dict[str, str], root: Path
                 "TRITON_CACHE_DIR=/cache/triton",
                 "MIOPEN_USER_DB_PATH=/cache/miopen",
                 "MIOPEN_CUSTOM_CACHE_DIR=/cache/miopen",
+                f"SPEECH_WORKERS={speech.workers}",
             ],
             "volumes": [
                 f"{data}/model:/model:ro",
