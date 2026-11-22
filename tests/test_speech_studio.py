@@ -193,3 +193,33 @@ def test_import_summary_reports_the_chapters_and_each_kind_of_change():
         'numeric citation: 12 (for example "[3]")',
         "table skipped: 2",
     ]
+
+
+@pytest.mark.parametrize(("seconds", "expected"), [(47.4, 55), (10.0, 12), (0.0, 0), (0.01, 1)])
+def test_shown_wait_is_padded_and_rounded_up_to_a_whole_second(seconds, expected):
+    """The displayed wait is 15% over the measured one, then rounded up, so it errs long."""
+    assert run_logic(f"paddedWait({seconds})") == expected
+
+
+@pytest.mark.parametrize(
+    ("remaining_ms", "expected"), [(12000, 12), (11001, 12), (10999, 11), (400, 1), (-5000, 1)]
+)
+def test_countdown_falls_one_whole_second_at_a_time_and_stops_at_one(remaining_ms, expected):
+    """The shown wait rounds up, so it steps down once per second and never reads zero or less."""
+    assert run_logic(f"countdown({remaining_ms}, 0)") == expected
+
+
+@pytest.mark.parametrize(
+    ("ends_at", "candidate", "expected"),
+    [
+        (0, 50000, 50000),
+        (40000, 42500, 40000),
+        (40000, 37500, 40000),
+        (40000, 29000, 29000),
+        (40000, 60000, 60000),
+        (-5, 8000, 8000),
+    ],
+)
+def test_deadline_moves_only_for_a_change_beyond_the_tolerance(ends_at, candidate, expected):
+    """A candidate within 3 s or 25% of the time left is ignored; a missed deadline is replaced."""
+    assert run_logic(f"nextDeadline({ends_at}, {candidate}, 0)") == expected

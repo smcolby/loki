@@ -188,7 +188,13 @@
 // the audio will be ready by the time the audio already made has played.
 const SECONDS_PER_CHAR = 0.075;   // prior: about 110 words per minute
 const PACE_UNCERTAINTY = 1.3;     // plan for slower speech than the prior, since pace varies by about 30%
-const START_MARGIN = 1.5;         // seconds of cushion against a slow chunk
+const DEADLINE_TOLERANCE_MS = 3000; // the shown deadline moves only for a larger change than this
+const DEADLINE_TOLERANCE_SHARE = 0.25; // or this share of the time left
+const WAIT_PADDING = 1.15;        // the shown wait is this much longer than the measured one
+const ESTIMATE_REFRESH_MS = 1000; // how often the shown rate line changes
+const WAIT_MIN_ELAPSED = 2;       // seconds of generation before a wait is shown, since the first rate is noise
+const WAIT_REESTIMATE_MS = 1000;  // how often the wait deadline is measured again
+const START_MARGIN = 1.5;        // seconds of cushion against a slow chunk
 
 function expectedTotal(chars, received, ended) {
   if (ended) return received;
@@ -222,6 +228,25 @@ function secondsUntilStart(chars, received, elapsed) {
 }
 
 const GENERATION_RATE = 0.77;     // measured: seconds of speech made per second of generation on this GPU
+
+// A wait shown to the person: padded toward the slow side and rounded up to a whole second
+function paddedWait(seconds) {
+  return Math.ceil(seconds * WAIT_PADDING);
+}
+
+// Whole seconds left until a deadline in milliseconds, never below 1 while still waiting
+function countdown(endsAt, now) {
+  return Math.max(1, Math.ceil((endsAt - now) / 1000));
+}
+
+// The deadline to show: the current one while it is within tolerance of the new candidate, so the
+// countdown ticks down steadily instead of following every estimate; the candidate once it is
+// missed or the two differ by more than the tolerance
+function nextDeadline(endsAt, candidate, now) {
+  if (!endsAt || endsAt <= now) return candidate;
+  const tolerance = Math.max(DEADLINE_TOLERANCE_MS, DEADLINE_TOLERANCE_SHARE * (endsAt - now));
+  return Math.abs(candidate - endsAt) > tolerance ? candidate : endsAt;
+}
 
 function formatSeconds(seconds) {
   const s = Math.round(seconds);
@@ -557,10 +582,35 @@ function updateControls() {
 [textBox, instruction, cfg].forEach((node) => node.addEventListener("input", updateControls));
 updateControls();
 
+// Player text is written at most once per interval whatever the callers do; a call inside the
+// interval is held and the latest text is written when the interval ends
+const PLAYER_WRITE_MS = 1000;
+let playerShown = { title: null, state: null, stats: null, at: -Infinity };
+let playerWaiting = null;
+let playerTimer = 0;
+
+function writePlayer(text, now) {
+  playerWaiting = null;
+  if (text.title !== playerShown.title) $("playerTitle").textContent = text.title;
+  if (text.state !== playerShown.state) $("playerState").textContent = text.state;
+  if (text.stats !== playerShown.stats) $("playerStats").textContent = text.stats;
+  playerShown = { ...text, at: now };
+}
+
 function setPlayer(title, state, stats) {
-  $("playerTitle").textContent = title;
-  $("playerState").textContent = state;
-  $("playerStats").textContent = stats || "";
+  const text = { title, state, stats: stats || "" };
+  const now = performance.now();
+  if (now - playerShown.at >= PLAYER_WRITE_MS) {
+    writePlayer(text, now);
+    return;
+  }
+  playerWaiting = text;
+  if (!playerTimer) {
+    playerTimer = setTimeout(() => {
+      playerTimer = 0;
+      if (playerWaiting) writePlayer(playerWaiting, performance.now());
+    }, playerShown.at + PLAYER_WRITE_MS - now);
+  }
 }
 
 // Stop the request, the scheduled audio, and the progress timer of the running session
@@ -599,6 +649,7 @@ async function generate() {
 
   setPlayer("Starting", "Waiting for Breeze. If another model is loaded it is unloaded first; loading takes about 45 to 95 s.", "");
   let received = 0, firstByte = 0, playing = false, startedAt = 0, nextTime = 0, ended = false, outputId = "";
+  let shownAt = 0, shownStats = "", waitAt = -Infinity, waitEndsAt = 0, seenReceived = -1, seenElapsed = 0, seenAt = 0;
   const queue = [];
   const chars = text.length;
 
@@ -622,8 +673,26 @@ async function generate() {
       playing = true; startedAt = context.currentTime + 0.05;
       while (queue.length) schedule(queue.shift());
     }
-    const rate = generationRate(received, elapsed);
-    const stats = firstByte ? `Made ${formatSeconds(received)} of about ${formatSeconds(total)} at ${rate.toFixed(2)}x real time.` : "";
+
+    // Refresh the rate line each interval, and at once when generation ends
+    const now = performance.now();
+    if (firstByte && (ended || now - shownAt >= ESTIMATE_REFRESH_MS)) {
+      shownAt = now;
+      const rate = generationRate(received, elapsed);
+      shownStats = `Made ${formatSeconds(received)} of about ${formatSeconds(total)} at ${rate.toFixed(2)}x real time.`;
+    }
+    const stats = shownStats;
+
+    // Measure the rate as of the latest audio, so it does not decay between arrivals
+    if (received !== seenReceived) { seenReceived = received; seenElapsed = elapsed; seenAt = now; }
+
+    // Estimate the deadline each second from that rate, and move the shown one only for a real change
+    if (elapsed >= WAIT_MIN_ELAPSED && now - waitAt >= WAIT_REESTIMATE_MS) {
+      waitAt = now;
+      const wait = secondsUntilStart(chars, seenReceived, seenElapsed);
+      if (wait !== null) waitEndsAt = nextDeadline(waitEndsAt, seenAt + paddedWait(wait) * 1000, now);
+    }
+    const shownWait = waitEndsAt ? countdown(waitEndsAt, now) : null;
     if (playing) {
       const position = Math.max(0, context.currentTime - startedAt);
       $("barPlay").style.width = `${Math.min(100, (position / total) * 100)}%`;
@@ -631,8 +700,7 @@ async function generate() {
       setPlayer(finished ? "Finished" : "Playing", finished ? "Finished." : (ended ? "Playing." : "Playing while the rest is made."), stats);
       if (finished && session === mine) stopSession();
     } else if (firstByte) {
-      const wait = secondsUntilStart(chars, received, elapsed);
-      setPlayer("Buffering", wait === null ? "Buffering..." : `Playback starts in about ${formatSeconds(wait)}, once enough is made to play without a gap.`, stats);
+      setPlayer("Buffering", shownWait === null ? "Buffering..." : `Playback starts in about ${formatSeconds(shownWait)}, once enough is made to play without a gap.`, stats);
     }
   };
   mine.timer = setInterval(refresh, 250);
