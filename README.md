@@ -53,7 +53,7 @@ llama:
 strata:
   engines: {}                                       # Engine name -> config file (see below).
   data_dir: ~/.llms/strata                          # Holds the engine configs and model files.
-  ref: a0116b2782a5b82622358c04a06496485d12b2d6     # Strata commit to build.
+  ref: c6f6427d9de9016fd92d13e29740f65625261df7     # Strata commit to build.
   gpu_targets: gfx1100
   rocm_version: 7.10.0a20251120                     # TheRock ROCm wheels.
 

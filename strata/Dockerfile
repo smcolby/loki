@@ -18,7 +18,8 @@ RUN git init -q . \
     && git fetch -q --depth 1 origin "${STRATA_REF}" \
     && git checkout -q FETCH_HEAD
 
-# Install ROCm into the venv and compile the HIP engine the way Strata's setup.py does
+# Install ROCm into the venv and compile the HIP engine from engine/ the way Strata's terminal/setup.py does
+WORKDIR /opt/strata/terminal
 ENV STRATA_ROCM_VERSION=${ROCM_VERSION}
 RUN python3 -m venv .venv \
     && .venv/bin/pip install --no-cache-dir --quiet -r requirements.txt \
@@ -28,9 +29,9 @@ RUN python3 -m venv .venv \
 RUN SDK=$(.venv/bin/rocm-sdk path --root) \
     && LIBS=$(find .venv/lib -maxdepth 4 -type d -path '*_rocm_sdk_libraries_*/lib') \
     && { test -d "$LIBS" || { echo "no ROCm libraries package for ${GPU_TARGETS} in .venv" >&2; exit 1; }; } \
-    && mkdir -p /out/lib /out/engine \
+    && mkdir -p /out/lib /out/engine /out/terminal \
     && cp engine/strata engine/BUILD.json /out/engine/ \
-    && cp -r serve tools data requirements.txt /out/ \
+    && tar --exclude=./.venv --exclude=./engine --exclude=./tests -cf - . | tar -xf - -C /out/terminal \
     && .venv/bin/python -c "import setup, shutil; t = setup.hipblaslt_table('${GPU_TARGETS}', setup.rocm_root('${GPU_TARGETS}')[1]); t and shutil.copy(t, '/out/hipblaslt-tuning.txt')" \
     && DLOPENED="$SDK/lib/libamd_comgr.so.3 $SDK/lib/libhiprtc.so.7 $SDK/lib/libhiprtc-builtins.so.7" \
     && for lib in $DLOPENED $(for f in engine/strata $DLOPENED; do \
@@ -54,7 +55,7 @@ RUN missing=$(for f in engine/strata lib/*.so*; do \
                   LD_LIBRARY_PATH=/opt/strata/lib ldd "$f" | grep "not found" | sed "s|^|$f: |"; \
               done) \
     && { test -z "$missing" || { echo "$missing" >&2; exit 1; }; }
-RUN python3 -m venv .venv && .venv/bin/pip install --no-cache-dir --quiet -r requirements.txt
+RUN python3 -m venv .venv && .venv/bin/pip install --no-cache-dir --quiet -r terminal/requirements.txt
 COPY entrypoint.py /opt/strata/entrypoint.py
 
 ENV PYTHONUNBUFFERED=1 \
