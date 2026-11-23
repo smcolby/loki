@@ -10,7 +10,7 @@ from loki.cli import _build_services, _missing_services
 from loki.config import ImageConfig, ImageEngineConfig, gateway_tag
 
 LLAMA = "loki-llama:gfx1100-rocm7.2.4-abc123"
-STRATA = "loki-strata:gfx1100-rocm7.10.0a20251120-a0116b2782a5b82622358c04a06496485d12b2d6"
+STRATA = "loki-strata:gfx1100-rocm7.10.0a20251120-c6f6427d9de9016fd92d13e29740f65625261df7"
 
 
 def _inspect(mocker, present: set[str]):

@@ -3,7 +3,7 @@
 The mounted config (``/etc/strata/strata.json``) carries the model choice: engine
 ``args``, ``tokenizer``, ``model_name``, and optional ``env``. This script fills in
 where the engine, its libraries, and its GEMM tuning table live inside the image,
-then replaces itself with ``serve/server.py`` listening on all interfaces with the
+then replaces itself with ``terminal/serve/server.py`` listening on all interfaces with the
 model unloaded until the first request.
 """
 
@@ -35,7 +35,7 @@ def merge_config(user: dict[str, Any], root: Path, tuning: Path | None) -> dict[
     Returns
     -------
     dict[str, Any]
-        Config ready for ``serve/server.py --config``.
+        Config ready for ``terminal/serve/server.py --config``.
 
     Raises
     ------
@@ -75,7 +75,7 @@ def main() -> None:
         sys.exit(f"Cannot start Strata: {exc}")
     MERGED_CONFIG.write_text(json.dumps(merged, indent=1))
 
-    server = STRATA_ROOT / "serve" / "server.py"
+    server = STRATA_ROOT / "terminal" / "serve" / "server.py"
     argv = [
         sys.executable,
         str(server),
