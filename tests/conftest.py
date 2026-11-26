@@ -5,7 +5,14 @@ from pathlib import Path
 
 import pytest
 
-from loki.config import GATEWAY_SOURCES, KiwixFile, LlamaConfig, LokiConfig, PortsConfig
+from loki.config import (
+    GATEWAY_SOURCES,
+    SPEECH_SOURCES,
+    KiwixFile,
+    LlamaConfig,
+    LokiConfig,
+    PortsConfig,
+)
 
 
 @pytest.fixture
@@ -49,6 +56,17 @@ def gateway_sources(mocker, tmp_path) -> Path:
     for name in GATEWAY_SOURCES:
         (source_dir / name).write_text(f"{name}\n")
     mocker.patch("loki.cli.gateway_dir", return_value=source_dir)
+    return source_dir
+
+
+@pytest.fixture(autouse=True)
+def speech_sources(mocker, tmp_path) -> Path:
+    """Give the speech image tag fixed build inputs under ``tmp_path``."""
+    source_dir = tmp_path / "speech"
+    for name in SPEECH_SOURCES:
+        (source_dir / name).parent.mkdir(parents=True, exist_ok=True)
+        (source_dir / name).write_text(f"{name}\n")
+    mocker.patch("loki.cli.speech_dir", return_value=source_dir)
     return source_dir
 
 

@@ -7,7 +7,9 @@ and unloads every other engine's models before the first request to a
 different engine. Requests to the engine that already holds the GPU pass
 straight through; a request for another engine waits for in-flight requests to
 finish, then swaps. An optional preload loads one text model at startup, and
-``/strata/`` serves the live Strata engine's web dashboard read-only.
+``/strata/`` serves the live Strata engine's web dashboard read-only. ``/breeze/``
+serves the Breeze speech Studio: its generation requests claim the GPU like any
+model request, while its page, voice library, and status pass through without one.
 """
 
 import asyncio
@@ -16,6 +18,7 @@ import email.policy
 import json
 import logging
 import os
+import re
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -47,6 +50,12 @@ TEXT_PATHS = (
     "/v1/messages/count_tokens",
 )
 IMAGE_PATHS = ("/v1/images/generations", "/v1/images/edits")
+# The speech supervisor's generation path, which loads Breeze, and the model id it publishes
+SPEECH_GENERATE_PATH = "/api/generate"
+SPEECH_JOB_START = re.compile(r"/api/jobs/[0-9a-f]{32}/start")
+SPEECH_MODEL = "breeze-tts-2"
+# A page on another site can post a form to this address but cannot add a custom header
+STUDIO_HEADER = "X-Loki-Studio"
 # Opens the dashboard on its Monitor tab (it reads the tab from the URL fragment at
 # load) and hides the Chat tab, whose requests the read-only route refuses
 DASHBOARD_HEAD = (
@@ -77,7 +86,7 @@ class Engine:
     ----------
     name : str
         Engine name shown in logs and the model list; its prefix before the first
-        hyphen is the engine type (``llama``, ``strata``, or ``image``).
+        hyphen is the engine type (``llama``, ``strata``, ``image``, or ``speech``).
     url : str
         Base URL of the engine's HTTP API, without a trailing slash.
     session : ClientSession
@@ -224,6 +233,25 @@ class ImageEngine(StrataEngine):
         """Return the configured model once sd-server answers its model listing."""
         await self._get_json("/v1/models")
         return [{"id": self.model_id, "object": "model"}]
+
+
+class SpeechEngine(StrataEngine):
+    """Breeze TTS 2 behind its supervisor, which starts it for generation and stops it on unload.
+
+    The supervisor stays up while another engine holds the GPU, so its voice
+    library and saved audio remain reachable; only its generation path needs
+    the GPU. It lists a fixed model id, kept out of ``/v1/models`` like the image
+    models, since chat clients read that list as chat models.
+    """
+
+    paths: ClassVar[tuple[str, ...]] = ()
+    listed: ClassVar[bool] = False
+    dashboard: ClassVar[bool] = False
+
+    async def models(self) -> list[dict[str, Any]]:
+        """Return the speech model once the supervisor answers its model listing."""
+        await self._get_json("/v1/models")
+        return [{"id": SPEECH_MODEL, "object": "model"}]
 
 
 @dataclass
@@ -603,6 +631,50 @@ async def _dashboard_page(engine: Engine) -> web.Response:
     return web.Response(body=page, status=status, content_type=content_type, charset="utf-8")
 
 
+async def handle_speech(request: web.Request) -> web.StreamResponse:
+    """Serve the Breeze Studio, claiming the GPU only for a generation request.
+
+    Everything under ``/breeze/`` is relayed to the speech supervisor with the
+    prefix removed. The Studio page, the voice library, saved audio, and status
+    read from the supervisor's own storage, so they pass through while another
+    engine holds the GPU. ``POST /breeze/api/generate`` and starting a narration job
+    load Breeze, so they wait for the GPU like a model request. A job keeps running
+    after the start request ends, so the GPU lease covers only the start.
+    """
+    gateway: Gateway = request.app["gateway"]
+    engine = next((e for e in gateway.engines if isinstance(e, SpeechEngine)), None)
+    if engine is None:
+        return api_error(404, "no speech engine is configured")
+
+    # Redirect to the trailing slash, which the Studio's relative paths need
+    if request.path == "/breeze":
+        raise web.HTTPPermanentRedirect("/breeze/")
+    # Reach only the Studio page and its API; the supervisor's health and unload stay internal
+    tail = request.match_info.get("tail", "")
+    if tail and not tail.startswith("api/"):
+        return api_error(404, f"no Breeze Studio page at /breeze/{tail}")
+    path = "/" + tail
+    if request.query_string:
+        path += "?" + request.query_string
+    body = await request.read()
+    route = path.partition("?")[0]
+    loads_breeze = route == SPEECH_GENERATE_PATH or SPEECH_JOB_START.fullmatch(route)
+    if request.method != "POST" or not loads_breeze:
+        return await _forward(request, engine, body, path)
+
+    # Refuse before claiming the GPU, so a cross-site form post cannot unload the loaded model
+    if STUDIO_HEADER not in request.headers:
+        return api_error(403, f"generation requests need the {STUDIO_HEADER} header")
+    try:
+        await gateway.arbiter.acquire(engine)
+    except EngineError as exc:
+        return api_error(503, f"cannot free the GPU for {SPEECH_MODEL}: {exc}", "server_error")
+    try:
+        return await _forward(request, engine, body, path)
+    finally:
+        await gateway.arbiter.release()
+
+
 def build_app(engines: list[Engine], preload_model: str = "") -> web.Application:
     """Create the gateway application around ``engines``.
 
@@ -622,6 +694,8 @@ def build_app(engines: list[Engine], preload_model: str = "") -> web.Application
         app.router.add_post(path, handle_inference)
     app.router.add_route("*", "/strata", handle_dashboard)
     app.router.add_route("*", "/strata/{tail:.*}", handle_dashboard)
+    app.router.add_route("*", "/breeze", handle_speech)
+    app.router.add_route("*", "/breeze/{tail:.*}", handle_speech)
 
     # Run the preload beside request handling and stop it on shutdown
     if preload_model:
@@ -641,6 +715,7 @@ ENGINE_TYPES: dict[str, type[Engine]] = {
     "llama": LlamaEngine,
     "strata": StrataEngine,
     "image": ImageEngine,
+    "speech": SpeechEngine,
 }
 
 

@@ -121,6 +121,11 @@ tts:
   enabled: true
   voice: af_heart
 
+# Breeze TTS 2 clones voices and reads text aloud in the Studio at /breeze/; it shares the GPU
+speech:
+  enabled: true
+  data_dir: /home/you/.llms/breeze
+
 # Text model the gateway loads when it starts, so the first prompt skips the load
 preload: swift-qwen3.8-flash-next-iq3_xxs
 

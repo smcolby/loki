@@ -279,6 +279,61 @@ class TtsConfig(BaseModel):
     voice: str = "af_heart"
 
 
+SPEECH_SERVICE = "speech-breeze"
+
+
+class SpeechConfig(BaseModel):
+    """Settings for the optional Breeze TTS 2 container that clones voices and reads text aloud.
+
+    Breeze runs under a supervisor that starts it for the first request and stops it
+    when the gateway hands the GPU to another engine. The supervisor stays up, so the
+    voice library and saved audio remain available while another model is loaded.
+
+    Attributes
+    ----------
+    enabled : bool
+        Run the speech container as Compose service ``speech-breeze`` and serve its
+        Studio at ``/breeze/``. Default is ``False``.
+    data_dir : Path
+        Directory holding ``model/`` (the Breeze checkpoint, mounted read-only),
+        ``library/`` (saved voices and audio) and ``cache/`` (compile caches kept
+        between starts, which cut a start from about 94 s to about 43 s).
+    ref : str
+        Breeze TTS 2 inference code commit the image is built from.
+    rocm_version : str
+        ROCm release of the PyTorch base image.
+    torch_version : str
+        PyTorch release of the base image; Breeze pins ``torch==2.9.1``.
+    args : list of str
+        Extra ``breeze_infer.api`` options, such as ``--fast-depth-decoder``.
+    workers : int
+        Breeze processes a narration job speaks on at once, 1 or 2. Two finish a job about
+        1.5 times faster than one and use about 21 of 24 GiB of GPU memory; the second
+        starts with a job and stops when it ends. Single generations always use one.
+        Default is 1.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    data_dir: Path = Field(default=Path("~/.llms/breeze"), validate_default=True)
+    ref: str = "a43d19e718b322e1cb3b2aa66f6d37d7945f4b21"
+    rocm_version: str = "7.2.4"
+    torch_version: str = "2.9.1"
+    args: list[str] = ["--fast-depth-decoder"]
+    workers: int = Field(default=1, ge=1, le=2)
+
+    @field_validator("data_dir")
+    @classmethod
+    def _absolute_data_dir(cls, value: Path) -> Path:
+        """Expand ``~`` and anchor relative paths so the container mounts match the host."""
+        return value.expanduser().absolute()
+
+    def services(self) -> list[str]:
+        """Return the Compose service names the speech engine runs as."""
+        return [SPEECH_SERVICE] if self.enabled else []
+
+
 class LokiConfig(BaseModel):
     """Top-level configuration for the loki stack.
 
@@ -296,6 +351,8 @@ class LokiConfig(BaseModel):
         Image generation engine settings.
     tts : TtsConfig
         Text-to-speech server settings.
+    speech : SpeechConfig
+        Breeze TTS 2 voice cloning engine settings.
     preload : str or None
         Id of a text model the gateway loads when it starts, so the first
         request skips the load. ``None`` (the default) loads nothing until a
@@ -312,6 +369,7 @@ class LokiConfig(BaseModel):
     strata: StrataConfig = Field(default_factory=StrataConfig)
     image: ImageConfig = Field(default_factory=ImageConfig)
     tts: TtsConfig = Field(default_factory=TtsConfig)
+    speech: SpeechConfig = Field(default_factory=SpeechConfig)
     preload: str | None = None
     kiwix_files: list[KiwixFile] = []
 
@@ -327,7 +385,7 @@ class LokiConfig(BaseModel):
 
     def engine_services(self) -> list[str]:
         """Return the Compose services that serve models, in gateway listing order."""
-        return ["llama", *self.strata.services(), *self.image.services()]
+        return ["llama", *self.strata.services(), *self.image.services(), *self.speech.services()]
 
 
 def load_config(path: Path | None = None) -> LokiConfig:
@@ -479,7 +537,53 @@ def gateway_tag(source_dir: Path) -> str:
     return digest.hexdigest()[:12]
 
 
-def image_names(config: LokiConfig, gateway: str) -> dict[str, str]:
+SPEECH_SOURCES = (
+    "Dockerfile",
+    "constraints.txt",
+    "speech_supervisor.py",
+    "narration.py",
+    "textimport.py",
+    "studio/index.html",
+)
+
+
+def speech_dir() -> Path:
+    """Return the speech image's build context under ``LOKI_ROOT``.
+
+    Returns
+    -------
+    Path
+        ``<LOKI_ROOT>/speech``
+    """
+    return _default_root() / "speech"
+
+
+def speech_tag(source_dir: Path) -> str:
+    """Return an image tag part that changes whenever the speech image's build inputs change.
+
+    Parameters
+    ----------
+    source_dir : Path
+        Directory holding the speech image's Dockerfile, constraints, supervisor,
+        narration and import modules, and Studio.
+
+    Returns
+    -------
+    str
+        First 12 hex digits of a SHA-256 over the build inputs.
+
+    Raises
+    ------
+    OSError
+        If a build input is missing or unreadable.
+    """
+    digest = hashlib.sha256()
+    for name in SPEECH_SOURCES:
+        digest.update(name.encode() + b"\0" + (source_dir / name).read_bytes() + b"\0")
+    return digest.hexdigest()[:12]
+
+
+def image_names(config: LokiConfig, gateway: str, speech: str = "") -> dict[str, str]:
     """Return the ``repo:tag`` each locally built Compose service runs.
 
     Tags carry every build input, so changing the GPU target, ROCm version,
@@ -491,26 +595,33 @@ def image_names(config: LokiConfig, gateway: str) -> dict[str, str]:
         Configuration holding each engine's build settings.
     gateway : str
         Tag from :func:`gateway_tag`.
+    speech : str, optional
+        Tag from :func:`speech_tag`; empty (the default) when the speech image is not built.
 
     Returns
     -------
     dict of str to str
-        Service name (``llama``, ``strata``, ``image``, ``gateway``) to image name.
+        Service name (``llama``, ``strata``, ``image``, ``speech``, ``gateway``) to image name.
     """
-    llama, strata, image = config.llama, config.strata, config.image
+    llama, strata, image, breeze = config.llama, config.strata, config.image, config.speech
     return {
         "llama": f"loki-llama:{llama.gpu_targets}-rocm{llama.rocm_version}-{llama.ref}",
         "strata": f"loki-strata:{strata.gpu_targets}-rocm{strata.rocm_version}-{strata.ref}",
         "image": f"loki-image:{image.gpu_targets}-rocm{image.rocm_version}-{image.ref}",
+        "speech": (
+            f"loki-speech:rocm{breeze.rocm_version}-torch{breeze.torch_version}"
+            f"-{breeze.ref[:12]}-{speech}"
+        ),
         "gateway": f"loki-gateway:{gateway}",
     }
 
 
 def build_caddyfile(caddy_url: str) -> str:
-    """Return the Caddyfile content that routes a URL to Open WebUI and the Strata dashboard.
+    """Return the Caddyfile content that routes a URL to Open WebUI, the dashboard, and the Studio.
 
-    ``/strata`` and everything under it go to the gateway, which serves the live
-    Strata engine's dashboard; every other path goes to Open WebUI.
+    ``/strata`` and ``/breeze`` and everything under them go to the gateway, which
+    serves the live Strata engine's dashboard and the Breeze Studio; every other
+    path goes to Open WebUI.
 
     Parameters
     ----------
@@ -523,9 +634,12 @@ def build_caddyfile(caddy_url: str) -> str:
         Caddyfile configuration as a string.
     """
     return (
-        f"# Route the Strata dashboard to the gateway and everything else to Open WebUI.\n"
+        f"# Route the Strata dashboard and Breeze Studio to the gateway, the rest to Open WebUI.\n"
         f"http://{caddy_url} {{\n"
         f"\thandle /strata* {{\n"
+        f"\t\treverse_proxy gateway:8080\n"
+        f"\t}}\n"
+        f"\thandle /breeze* {{\n"
         f"\t\treverse_proxy gateway:8080\n"
         f"\t}}\n"
         f"\thandle {{\n"
@@ -573,6 +687,22 @@ def build_env_file(config: LokiConfig, images: dict[str, str]) -> str:
     )
 
 
+def device_groups() -> list[str]:
+    """Return the numeric group ids that own the GPU device nodes.
+
+    A container run as the host user needs these groups to open ``/dev/kfd`` and the
+    render nodes; the groups' names do not exist inside every image, so ids are used.
+
+    Returns
+    -------
+    list of str
+        Sorted distinct group ids, empty when no GPU device node exists.
+    """
+    nodes = [Path("/dev/kfd"), *sorted(Path("/dev/dri").glob("render*"))]
+    gids = {node.stat().st_gid for node in nodes if node.exists()}
+    return [str(gid) for gid in sorted(gids)]
+
+
 def build_engines_compose(config: LokiConfig, images: dict[str, str], root: Path) -> str:
     """Return a Compose file with one service per configured engine, plus Kokoro if enabled.
 
@@ -585,11 +715,14 @@ def build_engines_compose(config: LokiConfig, images: dict[str, str], root: Path
     its published CPU image with no GPU devices, so it never contends with the
     engines for the GPU.
 
+    The Breeze speech service mounts its checkpoint read-only and its library and
+    compile cache read-write, and passes the configured Breeze options as its command.
+
     Parameters
     ----------
     config : LokiConfig
-        Configuration whose ``strata`` and ``image`` sections list the engines
-        and whose ``tts`` section enables Kokoro.
+        Configuration whose ``strata``, ``image`` and ``speech`` sections list the
+        engines and whose ``tts`` section enables Kokoro.
     images : dict of str to str
         Image names from :func:`image_names`.
     root : Path
@@ -657,6 +790,46 @@ def build_engines_compose(config: LokiConfig, images: dict[str, str], root: Path
             "security_opt": ["seccomp=unconfined"],
             "volumes": [f"{models_dir}:{models_dir}:ro"],
             "command": list(engine.args),
+            "networks": ["loki-net"],
+        }
+
+    # Add the Breeze speech engine, run as the host user so its library files belong to that user
+    speech = config.speech
+    if speech.enabled:
+        data = str(speech.data_dir)
+        services[SPEECH_SERVICE] = {
+            "build": {
+                "context": str(root / "speech"),
+                "args": {
+                    "ROCM_VERSION": speech.rocm_version,
+                    "TORCH_VERSION": speech.torch_version,
+                    "BREEZE_REF": speech.ref,
+                },
+            },
+            "image": images["speech"],
+            "container_name": f"loki-{SPEECH_SERVICE}",
+            "restart": "unless-stopped",
+            "init": True,
+            "user": f"{os.getuid()}:{os.getgid()}",
+            "group_add": device_groups(),
+            "devices": ["/dev/kfd", "/dev/dri"],
+            "security_opt": ["seccomp=unconfined"],
+            "environment": [
+                "HOME=/tmp/home",
+                "HF_HUB_OFFLINE=1",
+                "TRANSFORMERS_OFFLINE=1",
+                "TORCHINDUCTOR_CACHE_DIR=/cache/inductor",
+                "TRITON_CACHE_DIR=/cache/triton",
+                "MIOPEN_USER_DB_PATH=/cache/miopen",
+                "MIOPEN_CUSTOM_CACHE_DIR=/cache/miopen",
+                f"SPEECH_WORKERS={speech.workers}",
+            ],
+            "volumes": [
+                f"{data}/model:/model:ro",
+                f"{data}/library:/data",
+                f"{data}/cache:/cache",
+            ],
+            "command": list(speech.args),
             "networks": ["loki-net"],
         }
 
