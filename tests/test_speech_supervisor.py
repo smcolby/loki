@@ -1387,3 +1387,22 @@ async def test_a_failed_chunk_ends_the_job_on_both_processes_and_frees_them(
     assert failed["state"] == "failed"
     assert helper.state == "stopped"
     assert status["generating"] is False
+
+
+@pytest.mark.parametrize(
+    ("chunks", "expected"),
+    [
+        ([(0.0, 10.0)], [10.0]),
+        ([(0.0, 10.0), (2.0, 12.0)], [10.0, 2.0]),
+        ([(0.0, 5.0), (8.0, 10.0)], [5.0, 2.0]),
+        ([(0.0, 10.0), (1.0, 4.0)], [10.0, 0.0]),
+    ],
+    ids=["single", "overlap", "gap", "contained"],
+)
+def test_charged_seconds_counts_overlapping_chunks_once(chunks, expected):
+    """Chunks overlapping on two processes add elapsed time to a record, not summed durations."""
+    marks: dict[int, float] = {}
+
+    charged = [sup.charged_seconds(marks, -1, start, end) for start, end in chunks]
+
+    assert charged == expected

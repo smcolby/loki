@@ -103,6 +103,39 @@ class ChunkError(RuntimeError):
     """Breeze could not speak one chunk of the request."""
 
 
+def charged_seconds(marks: dict[int, float], key: int, started: float, finished: float) -> float:
+    """Return the seconds of elapsed time a finished chunk adds to a record, and advance its mark.
+
+    Chunks that overlap on two Breeze processes share their overlap, so a record's total is the
+    time something was speaking for it, not the sum of each chunk's own duration.
+
+    Parameters
+    ----------
+    marks : dict
+        The time up to which each record has been charged; updated in place.
+    key : int
+        Which record is charged (-1 for the job, or a chapter number).
+    started : float
+        When the chunk began, on the monotonic clock.
+    finished : float
+        When the chunk ended, on the same clock.
+
+    Returns
+    -------
+    float
+        Seconds from the later of the chunk's start and the record's mark to the chunk's end.
+
+    Examples
+    --------
+    >>> marks = {}
+    >>> charged_seconds(marks, 0, 0.0, 10.0), charged_seconds(marks, 0, 2.0, 12.0)
+    (10.0, 2.0)
+    """
+    spent = max(finished - max(started, marks.get(key, started)), 0.0)
+    marks[key] = max(finished, marks.get(key, finished))
+    return spent
+
+
 def child_command(args: list[str], port: int) -> list[str]:
     """Return the command line that starts Breeze's API on a private port.
 
@@ -1510,6 +1543,7 @@ class Supervisor:
             # Queue the chunks that have no saved file, and count what each chapter still needs
             queue: deque[tuple[int, int, str]] = deque()
             missing: dict[int, int] = {}
+            marks: dict[int, float] = {}
             for number, chunks in enumerate(plan):
                 if job["chapters"][number]["output_id"]:
                     continue
@@ -1546,9 +1580,10 @@ class Supervisor:
                         text, index, settings, voice, worker
                     )
                     self.jobs.write_chunk(job_id, number, index, pcm)
-                    spent = time.monotonic() - started
+                    finished = time.monotonic()
                     seconds = len(pcm) / 2 / SAMPLE_RATE
-                    for record in (job, chapter):
+                    for key, record in ((-1, job), (number, chapter)):
+                        spent = charged_seconds(marks, key, started, finished)
                         record["chunks_done"] += 1
                         record["speech_s"] = round(record["speech_s"] + seconds, 2)
                         record["generation_s"] = round(record["generation_s"] + spent, 2)
